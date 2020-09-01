@@ -115,7 +115,7 @@ const SettingsSchemaJSON = `{
       "type": "object",
       "additionalProperties": {
         "type": "array",
-        "items": { "type": "string" }
+        "items": { "anyOf": [{ "type": "object", "required": ["name", "regex"] }, { "type": "string" }] }
       }
     },
     "search.contextLines": {
