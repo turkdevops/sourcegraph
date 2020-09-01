@@ -25,12 +25,11 @@ interface Props extends ThemeProps, Exclude<React.ImgHTMLAttributes<HTMLImageEle
  * The Sourcegraph logo image. If a custom logo specified in the `branding` site configuration
  * property, it is used instead.
  */
-export const BrandLogo: React.FunctionComponent<Props> = ({
-    isLightTheme,
-    branding = window.context?.branding,
-    assetsRoot = window.context?.assetsRoot || '',
-    ...props
-}) => {
+export const BrandLogo: React.FunctionComponent<Props> = ({ isLightTheme, branding, assetsRoot, ...props }) => {
+    // Can't use destructuring default values because of https://github.com/babel/babel/issues/12026
+    branding = branding || window.context?.branding
+    assetsRoot = assetsRoot || window.context?.assetsRoot || ''
+
     const sourcegraphLogoUrl = `${assetsRoot}/img/sourcegraph${isLightTheme ? '-light' : ''}-head-logo.svg?v2`
     const customBrandingLogoUrl = branding?.[isLightTheme ? 'light' : 'dark']?.logo
     return props.customIcon && props.customText ? (
