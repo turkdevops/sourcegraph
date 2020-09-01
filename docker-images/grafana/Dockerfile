@@ -21,7 +21,7 @@ RUN mkdir -p /generated/grafana
 RUN DOC_SOLUTIONS_FILE='' PROMETHEUS_DIR='' GRAFANA_DIR=/generated/grafana /go/bin/monitoring-generator
 
 # when upgrading the Grafana version, please refer to https://about.sourcegraph.com/handbook/engineering/distribution/observability/monitoring#upgrading-grafana
-FROM grafana/grafana:7.1.3@sha256:e86bb674b2c275aae203e6a958c6fad1cb515eb1c1e80c820f4179fc0eb8ea4b as production
+FROM grafana/grafana:7.1.5@sha256:dfd940ed4dd82a6369cb057fe5ab4cc8c774c1c5b943b2f4b618302a7979de61 as production
 LABEL com.sourcegraph.grafana.version=7.0.3
 
 ARG COMMIT_SHA="unknown"
