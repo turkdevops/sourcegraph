@@ -14,4 +14,4 @@ const { add } = storiesOf('web/search/panels/EnterpriseHomePanels', module)
     })
     .addDecorator(story => <>{story()}</>)
 
-add('Panels', () => <WebStory>{() => <EnterpriseHomePanels />}</WebStory>)
+add('Panels', () => <WebStory>{() => <EnterpriseHomePanels authenticatedUser={null} />}</WebStory>)
