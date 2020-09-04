@@ -1,8 +1,14 @@
 .panel-container {
+    margin-bottom: 1rem;
+
     &__header {
         &-text {
             margin-bottom: 0.25rem;
             flex-grow: 1;
         }
+    }
+
+    &__content {
+        overflow-y: auto;
     }
 }
