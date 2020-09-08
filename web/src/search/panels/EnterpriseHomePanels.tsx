@@ -4,17 +4,20 @@ import { RecentFilesPanel } from './RecentFilesPanel'
 import { RecentSearchesPanel } from './RecentSearchesPanel'
 import { RepositoriesPanel } from './RepositoriesPanel'
 import { SavedSearchesPanel } from './SavedSearchesPanel'
+import { Observable } from 'rxjs'
+import { EventLogResult } from '../backend'
+import { PatternTypeProps } from '..'
 
-export const EnterpriseHomePanels: React.FunctionComponent<{
+interface Props extends Pick<PatternTypeProps, 'patternType'> {
     authenticatedUser: AuthenticatedUser | null
-}> = ({ authenticatedUser }) => (
+    fetchRecentSearches: (userId: string, first: number) => Observable<EventLogResult>
+}
+
+export const EnterpriseHomePanels: React.FunctionComponent<Props> = (props: Props) => (
     <div className="enterprise-home-panels container">
         <div className="row">
             <RepositoriesPanel className="enterprise-home-panels__panel col-lg-4" />
-            <RecentSearchesPanel
-                authenticatedUser={authenticatedUser}
-                className="enterprise-home-panels__panel col-lg-8"
-            />
+            <RecentSearchesPanel {...props} className="enterprise-home-panels__panel col-lg-8" />
         </div>
         <div className="row">
             <RecentFilesPanel className="enterprise-home-panels__panel col-lg-7" />
