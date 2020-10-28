@@ -22,6 +22,7 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/db/dbutil"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
 	"github.com/sourcegraph/sourcegraph/internal/jsonc"
+	"github.com/sourcegraph/sourcegraph/internal/secret"
 	"github.com/sourcegraph/sourcegraph/schema"
 )
 
@@ -33,6 +34,10 @@ type ExternalServicesStore struct {
 	GitHubValidators          []func(*schema.GitHubConnection) error
 	GitLabValidators          []func(*schema.GitLabConnection, []schema.AuthProviders) error
 	BitbucketServerValidators []func(*schema.BitbucketServerConnection) error
+
+	// PreCreateExternalService (if set) is invoked as a hook prior to creating a
+	// new external service in the database.
+	PreCreateExternalService func(context.Context) error
 }
 
 // ExternalServiceKinds contains a map of all supported kinds of
@@ -357,10 +362,17 @@ func (e *ExternalServicesStore) Create(ctx context.Context, confGet func() *conf
 	es.CreatedAt = time.Now().UTC().Truncate(time.Microsecond)
 	es.UpdatedAt = es.CreatedAt
 
+	// Prior to saving the record, run a validation hook.
+	if e.PreCreateExternalService != nil {
+		if err := e.PreCreateExternalService(ctx); err != nil {
+			return err
+		}
+	}
+
 	return dbconn.Global.QueryRowContext(
 		ctx,
 		"INSERT INTO external_services(kind, display_name, config, created_at, updated_at, namespace_user_id) VALUES($1, $2, $3, $4, $5, $6) RETURNING id",
-		es.Kind, es.DisplayName, es.Config, es.CreatedAt, es.UpdatedAt, es.NamespaceUserID,
+		es.Kind, es.DisplayName, secret.StringValue{S: &es.Config}, es.CreatedAt, es.UpdatedAt, es.NamespaceUserID,
 	).Scan(&es.ID)
 }
 
@@ -419,7 +431,7 @@ func (e *ExternalServicesStore) Update(ctx context.Context, ps []schema.AuthProv
 			}
 		}
 		if update.Config != nil {
-			if err := execUpdate(ctx, tx, sqlf.Sprintf("config=%s", update.Config)); err != nil {
+			if err := execUpdate(ctx, tx, sqlf.Sprintf("config=%s, next_sync_at=now()", secret.StringValue{S: update.Config})); err != nil {
 				return err
 			}
 		}
@@ -542,9 +554,10 @@ func (*ExternalServicesStore) list(ctx context.Context, conds []*sqlf.Query, lim
 			nextSyncAt     sql.NullTime
 			namepaceUserID sql.NullInt32
 		)
-		if err := rows.Scan(&h.ID, &h.Kind, &h.DisplayName, &h.Config, &h.CreatedAt, &h.UpdatedAt, &deletedAt, &lastSyncAt, &nextSyncAt, &namepaceUserID); err != nil {
+		if err := rows.Scan(&h.ID, &h.Kind, &h.DisplayName, &secret.StringValue{S: &h.Config}, &h.CreatedAt, &h.UpdatedAt, &deletedAt, &lastSyncAt, &nextSyncAt, &namepaceUserID); err != nil {
 			return nil, err
 		}
+
 		if deletedAt.Valid {
 			h.DeletedAt = &deletedAt.Time
 		}

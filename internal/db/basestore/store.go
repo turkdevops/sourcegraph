@@ -5,6 +5,7 @@ import (
 	"database/sql"
 
 	"github.com/keegancsmith/sqlf"
+	"github.com/sourcegraph/sourcegraph/internal/db/dbutil"
 )
 
 // Store is an abstract Postgres-backed data access layer. Instances of this struct
@@ -22,9 +23,8 @@ import (
 //         *basestore.Store
 //     }
 //
-//     func NewWithHandle(db dbutil.DB) *SprocketStore {
-//         handle := basestore.NewHandleWithDB(db)
-//         return &SprocketStore{Store: basestore.NewWithHandle(handle)}
+//     func NewWithDB(db dbutil.DB) *SprocketStore {
+//         return &SprocketStore{Store: basestore.NewWithDB(db, sql.TxOptions{})}
 //     }
 //
 //     func (s *SprocketStore) With(other basestore.ShareableStore) *SprocketStore {
@@ -33,7 +33,7 @@ import (
 //
 //     func (s *SprocketStore) Transact(ctx context.Context) (*SprocketStore, error) {
 //         txBase, err := s.Store.Transact(ctx)
-//         return &SprocketStore{Store: txBase}, nil
+//         return &SprocketStore{Store: txBase}, err
 //     }
 type Store struct {
 	handle *TransactableHandle
@@ -50,13 +50,18 @@ type ShareableStore interface {
 var _ ShareableStore = &Store{}
 
 // New returns a new base store connected to the given dsn (data store name).
-func New(postgresDSN, app string) (*Store, error) {
-	handle, err := NewHandle(postgresDSN, app)
+func New(postgresDSN, app string, txOptions sql.TxOptions) (*Store, error) {
+	handle, err := NewHandle(postgresDSN, app, txOptions)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Store{handle: handle}, nil
+	return NewWithHandle(handle), nil
+}
+
+// NewHandleWithDB returns a new base store connected to the given connection.
+func NewWithDB(db dbutil.DB, txOptions sql.TxOptions) *Store {
+	return NewWithHandle(NewHandleWithDB(db, txOptions))
 }
 
 // NewWithHandle returns a new base store using the given database handle.
@@ -90,6 +95,11 @@ func (s *Store) With(other ShareableStore) *Store {
 // Query performs QueryContext on the underlying connection.
 func (s *Store) Query(ctx context.Context, query *sqlf.Query) (*sql.Rows, error) {
 	return s.handle.db.QueryContext(ctx, query.Query(sqlf.PostgresBindVar), query.Args()...)
+}
+
+// QueryRow performs QueryRowContext on the underlying connection.
+func (s *Store) QueryRow(ctx context.Context, query *sqlf.Query) *sql.Row {
+	return s.handle.db.QueryRowContext(ctx, query.Query(sqlf.PostgresBindVar), query.Args()...)
 }
 
 // Exec performs a query and throws away the result.

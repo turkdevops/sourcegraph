@@ -3,9 +3,12 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	regexpsyntax "regexp/syntax"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/keegancsmith/sqlf"
 	"github.com/pkg/errors"
@@ -13,9 +16,18 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/authz"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
+	"github.com/sourcegraph/sourcegraph/internal/db/basestore"
 	"github.com/sourcegraph/sourcegraph/internal/db/dbconn"
 	"github.com/sourcegraph/sourcegraph/internal/db/dbutil"
 	"github.com/sourcegraph/sourcegraph/internal/db/query"
+	"github.com/sourcegraph/sourcegraph/internal/extsvc"
+	"github.com/sourcegraph/sourcegraph/internal/extsvc/awscodecommit"
+	"github.com/sourcegraph/sourcegraph/internal/extsvc/bitbucketcloud"
+	"github.com/sourcegraph/sourcegraph/internal/extsvc/bitbucketserver"
+	"github.com/sourcegraph/sourcegraph/internal/extsvc/github"
+	"github.com/sourcegraph/sourcegraph/internal/extsvc/gitlab"
+	"github.com/sourcegraph/sourcegraph/internal/extsvc/gitolite"
+	"github.com/sourcegraph/sourcegraph/internal/secret"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
 )
 
@@ -38,18 +50,49 @@ func (e *RepoNotFoundErr) NotFound() bool {
 	return true
 }
 
-// repos is a DB-backed implementation of the Repos
-type repos struct{}
+// RepoStore is a DB-backed implementation of the Repos.
+type RepoStore struct {
+	*basestore.Store
+
+	mu sync.Mutex
+}
+
+// NewRepoStoreWithDB instantiates and returns a new RepoStore with prepared statements.
+func NewRepoStoreWithDB(db dbutil.DB) *RepoStore {
+	return &RepoStore{Store: basestore.NewWithDB(db, sql.TxOptions{})}
+}
+
+func (s *RepoStore) With(other basestore.ShareableStore) *RepoStore {
+	return &RepoStore{Store: s.Store.With(other)}
+}
+
+func (s *RepoStore) Transact(ctx context.Context) (*RepoStore, error) {
+	txBase, err := s.Store.Transact(ctx)
+	return &RepoStore{Store: txBase}, err
+}
+
+// ensureStore instantiates a basestore.Store if necessary, using the dbconn.Global handle.
+// This function ensures access to dbconn happens after the rest of the code or tests have
+// initialized it.
+func (s *RepoStore) ensureStore() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Store == nil {
+		s.Store = basestore.NewWithDB(dbconn.Global, sql.TxOptions{})
+	}
+}
 
 // Get returns metadata for the request repository ID. It fetches data
 // only from the database and NOT from any external sources. If the
 // caller is concerned the copy of the data in the database might be
 // stale, the caller is responsible for fetching data from any
 // external services.
-func (s *repos) Get(ctx context.Context, id api.RepoID) (*types.Repo, error) {
+func (s *RepoStore) Get(ctx context.Context, id api.RepoID) (*types.Repo, error) {
 	if Mocks.Repos.Get != nil {
 		return Mocks.Repos.Get(ctx, id)
 	}
+	s.ensureStore()
 
 	repos, err := s.getBySQL(ctx, sqlf.Sprintf("id=%d LIMIT 1", id))
 	if err != nil {
@@ -69,10 +112,11 @@ func (s *repos) Get(ctx context.Context, id api.RepoID) (*types.Repo, error) {
 // Name is the name for this repository (e.g., "github.com/user/repo"). It is
 // the same as URI, unless the user configures a non-default
 // repositoryPathPattern.
-func (s *repos) GetByName(ctx context.Context, nameOrURI api.RepoName) (*types.Repo, error) {
+func (s *RepoStore) GetByName(ctx context.Context, nameOrURI api.RepoName) (*types.Repo, error) {
 	if Mocks.Repos.GetByName != nil {
 		return Mocks.Repos.GetByName(ctx, nameOrURI)
 	}
+	s.ensureStore()
 
 	repos, err := s.getBySQL(ctx, sqlf.Sprintf("name=%s LIMIT 1", nameOrURI))
 	if err != nil {
@@ -100,10 +144,11 @@ func (s *repos) GetByName(ctx context.Context, nameOrURI api.RepoName) (*types.R
 
 // GetByIDs returns a list of repositories by given IDs. The number of results list could be less
 // than the candidate list due to no repository is associated with some IDs.
-func (s *repos) GetByIDs(ctx context.Context, ids ...api.RepoID) ([]*types.Repo, error) {
+func (s *RepoStore) GetByIDs(ctx context.Context, ids ...api.RepoID) ([]*types.Repo, error) {
 	if Mocks.Repos.GetByIDs != nil {
 		return Mocks.Repos.GetByIDs(ctx, ids...)
 	}
+	s.ensureStore()
 
 	if len(ids) == 0 {
 		return []*types.Repo{}, nil
@@ -119,11 +164,12 @@ func (s *repos) GetByIDs(ctx context.Context, ids ...api.RepoID) ([]*types.Repo,
 
 // GetReposSetByIDs returns a map of repositories with the given IDs, indexed by their IDs. The number of results
 // entries could be less than the candidate list due to no repository is associated with some IDs.
-func (s *repos) GetReposSetByIDs(ctx context.Context, ids ...api.RepoID) (map[api.RepoID]*types.Repo, error) {
+func (s *RepoStore) GetReposSetByIDs(ctx context.Context, ids ...api.RepoID) (map[api.RepoID]*types.Repo, error) {
 	repos, err := s.GetByIDs(ctx, ids...)
 	if err != nil {
 		return nil, err
 	}
+	s.ensureStore()
 
 	repoMap := make(map[api.RepoID]*types.Repo, len(repos))
 	for _, r := range repos {
@@ -133,10 +179,19 @@ func (s *repos) GetReposSetByIDs(ctx context.Context, ids ...api.RepoID) (map[ap
 	return repoMap, nil
 }
 
-func (s *repos) Count(ctx context.Context, opt ReposListOptions) (int, error) {
+func (s *RepoStore) Count(ctx context.Context, opt ReposListOptions) (ct int, err error) {
 	if Mocks.Repos.Count != nil {
 		return Mocks.Repos.Count(ctx, opt)
 	}
+	s.ensureStore()
+
+	tr, ctx := trace.New(ctx, "repos.Count", "")
+	defer func() {
+		if err != nil {
+			tr.SetError(err)
+		}
+		tr.Finish()
+	}()
 
 	conds, err := s.listSQL(opt)
 	if err != nil {
@@ -144,9 +199,11 @@ func (s *repos) Count(ctx context.Context, opt ReposListOptions) (int, error) {
 	}
 
 	q := sqlf.Sprintf("SELECT COUNT(*) FROM repo WHERE %s", sqlf.Join(conds, "AND"))
+	tr.LazyPrintf("SQL: %v", q.Query(sqlf.PostgresBindVar))
 
 	var count int
-	if err := dbconn.Global.QueryRowContext(ctx, q.Query(sqlf.PostgresBindVar), q.Args()...).Scan(&count); err != nil {
+
+	if err := s.QueryRow(ctx, q).Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -158,6 +215,25 @@ FROM repo
 WHERE deleted_at IS NULL
 AND %%s`
 
+const getSourcesByRepoQueryStr = `
+(
+	SELECT
+		json_agg(
+		json_build_object(
+			'CloneURL', esr.clone_url,
+			'ID', esr.external_service_id,
+			'Kind', LOWER(svcs.kind)
+		)
+		)
+	FROM external_service_repos AS esr
+	JOIN external_services AS svcs ON esr.external_service_id = svcs.id
+	WHERE
+		esr.repo_id = repo.id
+		AND
+		svcs.deleted_at IS NULL
+)
+`
+
 var getBySQLColumns = []string{
 	"id",
 	"name",
@@ -167,17 +243,21 @@ var getBySQLColumns = []string{
 	"external_service_id",
 	"uri",
 	"description",
-	"language",
 	"fork",
 	"archived",
 	"cloned",
+	"created_at",
+	"updated_at",
+	"deleted_at",
+	"metadata",
+	getSourcesByRepoQueryStr,
 }
 
-func (s *repos) getBySQL(ctx context.Context, querySuffix *sqlf.Query) ([]*types.Repo, error) {
+func (s *RepoStore) getBySQL(ctx context.Context, querySuffix *sqlf.Query) ([]*types.Repo, error) {
 	return s.getReposBySQL(ctx, false, querySuffix)
 }
 
-func (s *repos) getReposBySQL(ctx context.Context, minimal bool, querySuffix *sqlf.Query) ([]*types.Repo, error) {
+func (s *RepoStore) getReposBySQL(ctx context.Context, minimal bool, querySuffix *sqlf.Query) ([]*types.Repo, error) {
 	columns := getBySQLColumns
 	if minimal {
 		columns = columns[:6]
@@ -188,7 +268,7 @@ func (s *repos) getReposBySQL(ctx context.Context, minimal bool, querySuffix *sq
 		querySuffix,
 	)
 
-	rows, err := dbconn.Global.QueryContext(ctx, q.Query(sqlf.PostgresBindVar), q.Args()...)
+	rows, err := s.Query(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +307,10 @@ func scanRepo(rows *sql.Rows, r *types.Repo) (err error) {
 		)
 	}
 
-	return rows.Scan(
+	var sources dbutil.NullJSONRawMessage
+	var metadata json.RawMessage
+
+	err = rows.Scan(
 		&r.ID,
 		&r.Name,
 		&r.Private,
@@ -235,12 +318,67 @@ func scanRepo(rows *sql.Rows, r *types.Repo) (err error) {
 		&dbutil.NullString{S: &r.ExternalRepo.ServiceType},
 		&dbutil.NullString{S: &r.ExternalRepo.ServiceID},
 		&dbutil.NullString{S: &r.URI},
-		&r.Description,
-		&r.Language,
+		&dbutil.NullString{S: &r.Description},
 		&r.Fork,
 		&r.Archived,
 		&r.Cloned,
+		&r.CreatedAt,
+		&dbutil.NullTime{Time: &r.UpdatedAt},
+		&dbutil.NullTime{Time: &r.DeletedAt},
+		&metadata,
+		&sources,
 	)
+	if err != nil {
+		return err
+	}
+
+	type sourceInfo struct {
+		ID       int64
+		CloneURL secret.StringValue
+		Kind     string
+	}
+	r.Sources = make(map[string]*types.SourceInfo)
+
+	if sources.Raw != nil {
+		var srcs []sourceInfo
+		if err = json.Unmarshal(sources.Raw, &srcs); err != nil {
+			return errors.Wrap(err, "scanRepo: failed to unmarshal sources")
+		}
+		for _, src := range srcs {
+			urn := extsvc.URN(src.Kind, src.ID)
+			r.Sources[urn] = &types.SourceInfo{
+				ID:       urn,
+				CloneURL: *src.CloneURL.S,
+			}
+		}
+	}
+
+	typ, ok := extsvc.ParseServiceType(r.ExternalRepo.ServiceType)
+	if !ok {
+		return nil
+	}
+	switch typ {
+	case extsvc.TypeGitHub:
+		r.Metadata = new(github.Repository)
+	case extsvc.TypeGitLab:
+		r.Metadata = new(gitlab.Project)
+	case extsvc.TypeBitbucketServer:
+		r.Metadata = new(bitbucketserver.Repo)
+	case extsvc.TypeBitbucketCloud:
+		r.Metadata = new(bitbucketcloud.Repo)
+	case extsvc.TypeAWSCodeCommit:
+		r.Metadata = new(awscodecommit.Repository)
+	case extsvc.TypeGitolite:
+		r.Metadata = new(gitolite.Repo)
+	default:
+		return nil
+	}
+
+	if err = json.Unmarshal(metadata, r.Metadata); err != nil {
+		return errors.Wrapf(err, "scanRepo: failed to unmarshal %q metadata", typ)
+	}
+
+	return nil
 }
 
 // ReposListOptions specifies the options for listing repositories.
@@ -306,6 +444,15 @@ type ReposListOptions struct {
 	// List of fields by which to order the return repositories.
 	OrderBy RepoListOrderBy
 
+	// CursorColumn contains the relevant column for cursor-based pagination (e.g. "name")
+	CursorColumn string
+
+	// CursorValue contains the relevant value for cursor-based pagination (e.g. "Zaphod").
+	CursorValue string
+
+	// CursorDirection contains the comparison for cursor-based pagination, all possible values are: next, prev.
+	CursorDirection string
+
 	*LimitOffset
 }
 
@@ -349,7 +496,7 @@ const (
 // This will not return any repositories from external services that are not present in the Sourcegraph repository.
 // The result list is unsorted and has a fixed maximum limit of 1000 items.
 // Matching is done with fuzzy matching, i.e. "query" will match any repo name that matches the regexp `q.*u.*e.*r.*y`
-func (s *repos) List(ctx context.Context, opt ReposListOptions) (results []*types.Repo, err error) {
+func (s *RepoStore) List(ctx context.Context, opt ReposListOptions) (results []*types.Repo, err error) {
 	tr, ctx := trace.New(ctx, "repos.List", "")
 	defer func() {
 		tr.SetError(err)
@@ -359,6 +506,7 @@ func (s *repos) List(ctx context.Context, opt ReposListOptions) (results []*type
 	if Mocks.Repos.List != nil {
 		return Mocks.Repos.List(ctx, opt)
 	}
+	s.ensureStore()
 
 	conds, err := s.listSQL(opt)
 	if err != nil {
@@ -372,13 +520,300 @@ func (s *repos) List(ctx context.Context, opt ReposListOptions) (results []*type
 	return s.getReposBySQL(ctx, opt.OnlyRepoIDs, fetchSQL)
 }
 
+// Create inserts repos and their sources, respectively in the repo and external_service_repos table.
+// Associated external services must already exist.
+func (s *RepoStore) Create(ctx context.Context, repos ...*types.Repo) (err error) {
+	tr, ctx := trace.New(ctx, "repos.Create", "")
+	defer func() {
+		tr.SetError(err)
+		tr.Finish()
+	}()
+	s.ensureStore()
+
+	records := make([]*repoRecord, 0, len(repos))
+
+	for _, r := range repos {
+		repoRec, err := newRepoRecord(r)
+		if err != nil {
+			return err
+		}
+
+		records = append(records, repoRec)
+	}
+
+	encodedRepos, err := json.Marshal(records)
+	if err != nil {
+		return err
+	}
+
+	q := sqlf.Sprintf(insertReposQuery, string(encodedRepos))
+
+	rows, err := s.Query(ctx, q)
+	if err != nil {
+		return errors.Wrap(err, "insert")
+	}
+	defer func() { err = basestore.CloseRows(rows, err) }()
+
+	for i := 0; rows.Next(); i++ {
+		if err := rows.Scan(&repos[i].ID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// repoRecord is the json representation of a repository as used in this package
+// Postgres CTEs.
+type repoRecord struct {
+	ID                  api.RepoID      `json:"id"`
+	Name                string          `json:"name"`
+	URI                 *string         `json:"uri,omitempty"`
+	Description         string          `json:"description"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           *time.Time      `json:"updated_at,omitempty"`
+	DeletedAt           *time.Time      `json:"deleted_at,omitempty"`
+	ExternalServiceType *string         `json:"external_service_type,omitempty"`
+	ExternalServiceID   *string         `json:"external_service_id,omitempty"`
+	ExternalID          *string         `json:"external_id,omitempty"`
+	Archived            bool            `json:"archived"`
+	Fork                bool            `json:"fork"`
+	Private             bool            `json:"private"`
+	Metadata            json.RawMessage `json:"metadata"`
+	Sources             json.RawMessage `json:"sources,omitempty"`
+}
+
+func newRepoRecord(r *types.Repo) (*repoRecord, error) {
+	metadata, err := metadataColumn(r.Metadata)
+	if err != nil {
+		return nil, errors.Wrapf(err, "newRecord: metadata marshalling failed")
+	}
+
+	sources, err := sourcesColumn(r.ID, r.Sources)
+	if err != nil {
+		return nil, errors.Wrapf(err, "newRecord: sources marshalling failed")
+	}
+
+	return &repoRecord{
+		ID:                  r.ID,
+		Name:                string(r.Name),
+		URI:                 nullStringColumn(r.URI),
+		Description:         r.Description,
+		CreatedAt:           r.CreatedAt.UTC(),
+		UpdatedAt:           nullTimeColumn(r.UpdatedAt.UTC()),
+		DeletedAt:           nullTimeColumn(r.DeletedAt.UTC()),
+		ExternalServiceType: nullStringColumn(r.ExternalRepo.ServiceType),
+		ExternalServiceID:   nullStringColumn(r.ExternalRepo.ServiceID),
+		ExternalID:          nullStringColumn(r.ExternalRepo.ID),
+		Archived:            r.Archived,
+		Fork:                r.Fork,
+		Private:             r.Private,
+		Metadata:            metadata,
+		Sources:             sources,
+	}, nil
+}
+
+func nullTimeColumn(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+func nullStringColumn(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func nullInt32Column(i int32) *int32 {
+	if i == 0 {
+		return nil
+	}
+	return &i
+}
+
+func metadataColumn(metadata interface{}) (msg json.RawMessage, err error) {
+	switch m := metadata.(type) {
+	case nil:
+		msg = json.RawMessage("{}")
+	case string:
+		msg = json.RawMessage(m)
+	case []byte:
+		msg = m
+	case json.RawMessage:
+		msg = m
+	default:
+		msg, err = json.MarshalIndent(m, "        ", "    ")
+	}
+	return
+}
+
+func sourcesColumn(repoID api.RepoID, sources map[string]*types.SourceInfo) (json.RawMessage, error) {
+	var records []externalServiceRepo
+	for _, src := range sources {
+		records = append(records, externalServiceRepo{
+			ExternalServiceID: src.ExternalServiceID(),
+			RepoID:            int64(repoID),
+			CloneURL:          secret.StringValue{S: &src.CloneURL},
+		})
+	}
+
+	return json.MarshalIndent(records, "        ", "    ")
+}
+
+type externalServiceRepo struct {
+	ExternalServiceID int64              `json:"external_service_id"`
+	RepoID            int64              `json:"repo_id"`
+	CloneURL          secret.StringValue `json:"clone_url"`
+}
+
+var insertReposQuery = `
+WITH repos_list AS (
+  SELECT * FROM ROWS FROM (
+	json_to_recordset(%s)
+	AS (
+		name                  citext,
+		uri                   citext,
+		description           text,
+		created_at            timestamptz,
+		updated_at            timestamptz,
+		deleted_at            timestamptz,
+		external_service_type text,
+		external_service_id   text,
+		external_id           text,
+		archived              boolean,
+		fork                  boolean,
+		private               boolean,
+		metadata              jsonb,
+		sources               jsonb
+	  )
+	)
+	WITH ORDINALITY
+),
+inserted_repos AS (
+  INSERT INTO repo (
+	name,
+	uri,
+	description,
+	created_at,
+	updated_at,
+	deleted_at,
+	external_service_type,
+	external_service_id,
+	external_id,
+	archived,
+	fork,
+	private,
+	metadata
+  )
+  SELECT
+	name,
+	NULLIF(BTRIM(uri), ''),
+	description,
+	created_at,
+	updated_at,
+	deleted_at,
+	external_service_type,
+	external_service_id,
+	external_id,
+	archived,
+	fork,
+	private,
+	metadata
+  FROM repos_list
+  RETURNING id
+),
+inserted_repos_rows AS (
+  SELECT id, ROW_NUMBER() OVER () AS rn FROM inserted_repos
+),
+repos_list_rows AS (
+  SELECT *, ROW_NUMBER() OVER () AS rn FROM repos_list
+),
+inserted_repos_with_ids AS (
+  SELECT
+	inserted_repos_rows.id,
+	repos_list_rows.*
+  FROM repos_list_rows
+  JOIN inserted_repos_rows USING (rn)
+),
+sources_list AS (
+  SELECT
+    inserted_repos_with_ids.id AS repo_id,
+	sources.external_service_id AS external_service_id,
+	sources.clone_url AS clone_url
+  FROM
+    inserted_repos_with_ids,
+	jsonb_to_recordset(inserted_repos_with_ids.sources)
+	  AS sources(
+		external_service_id bigint,
+		repo_id             integer,
+		clone_url           text
+	  )
+),
+insert_sources AS (
+  INSERT INTO external_service_repos (
+    external_service_id,
+    repo_id,
+    clone_url
+  )
+  SELECT
+    external_service_id,
+    repo_id,
+    clone_url
+  FROM sources_list
+)
+SELECT id FROM inserted_repos_with_ids;
+`
+
+// Delete deletes repos associated with the given ids and their associated sources.
+func (s *RepoStore) Delete(ctx context.Context, ids ...api.RepoID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	s.ensureStore()
+
+	// The number of deleted repos can potentially be higher
+	// than the maximum number of arguments we can pass to postgres.
+	// We pass them as a json array instead to overcome this limitation.
+	encodedIds, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+
+	q := sqlf.Sprintf(deleteReposQuery, string(encodedIds))
+
+	err = s.Exec(ctx, q)
+	if err != nil {
+		return errors.Wrap(err, "delete")
+	}
+
+	return nil
+}
+
+const deleteReposQuery = `
+WITH repo_ids AS (
+  SELECT jsonb_array_elements_text(%s) AS id
+)
+UPDATE repo
+SET
+  name = soft_deleted_repository_name(name),
+  deleted_at = transaction_timestamp()
+FROM repo_ids
+WHERE deleted_at IS NULL
+AND repo.id = repo_ids.id::int
+`
+
 // ListEnabledNames returns a list of all enabled repo names. This is commonly
 // requested information by other services (repo-updater and
 // indexed-search). We special case just returning enabled names so that we
 // read much less data into memory.
-func (s *repos) ListEnabledNames(ctx context.Context) ([]string, error) {
+func (s *RepoStore) ListEnabledNames(ctx context.Context) ([]string, error) {
+	s.ensureStore()
+
 	q := sqlf.Sprintf("SELECT name FROM repo WHERE deleted_at IS NULL")
-	rows, err := dbconn.Global.QueryContext(ctx, q.Query(sqlf.PostgresBindVar), q.Args()...)
+	rows, err := s.Query(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -417,22 +852,29 @@ func parsePattern(p string) ([]*sqlf.Query, error) {
 		}
 	}
 	if len(like) > 0 {
-		var likeConds []*sqlf.Query
 		for _, v := range like {
-			likeConds = append(likeConds, sqlf.Sprintf(`lower(name) LIKE %s`, strings.ToLower(v)))
+			conds = append(conds, sqlf.Sprintf(`lower(name) LIKE %s`, strings.ToLower(v)))
 		}
-		conds = append(conds, sqlf.Sprintf("(%s)", sqlf.Join(likeConds, " OR ")))
 	}
 	if pattern != "" {
 		conds = append(conds, sqlf.Sprintf("lower(name) ~ lower(%s)", pattern))
 	}
-	return conds, nil
+	return []*sqlf.Query{sqlf.Sprintf("(%s)", sqlf.Join(conds, "OR"))}, nil
 }
 
-func (*repos) listSQL(opt ReposListOptions) (conds []*sqlf.Query, err error) {
+func (*RepoStore) listSQL(opt ReposListOptions) (conds []*sqlf.Query, err error) {
 	conds = []*sqlf.Query{
 		sqlf.Sprintf("deleted_at IS NULL"),
 	}
+
+	// Cursor-based pagination requires parsing a handful of extra fields, which
+	// may result in additional query conditions.
+	cursorConds, err := parseCursorConds(opt)
+	if err != nil {
+		return nil, err
+	}
+	conds = append(conds, cursorConds...)
+
 	if opt.Query != "" && (len(opt.IncludePatterns) > 0 || opt.ExcludePattern != "") {
 		return nil, errors.New("Repos.List: Query and IncludePatterns/ExcludePattern options are mutually exclusive")
 	}
@@ -512,6 +954,33 @@ func (*repos) listSQL(opt ReposListOptions) (conds []*sqlf.Query, err error) {
 		}
 	}
 
+	return conds, nil
+}
+
+// parseCursorConds checks whether the query is using cursor-based pagination, and
+// if so performs the necessary transformations for it to be successful.
+func parseCursorConds(opt ReposListOptions) (conds []*sqlf.Query, err error) {
+	if opt.CursorColumn == "" || opt.CursorValue == "" {
+		return nil, nil
+	}
+	var direction string
+	switch opt.CursorDirection {
+	case "next":
+		direction = ">="
+	case "prev":
+		direction = "<="
+	default:
+		return nil, fmt.Errorf("missing or invalid cursor direction: %q", opt.CursorDirection)
+	}
+
+	switch opt.CursorColumn {
+	case string(RepoListName):
+		conds = append(conds, sqlf.Sprintf("name "+direction+" %s", opt.CursorValue))
+	case string(RepoListCreatedAt):
+		conds = append(conds, sqlf.Sprintf("created_at "+direction+" %s", opt.CursorValue))
+	default:
+		return nil, fmt.Errorf("missing or invalid cursor: %q %q", opt.CursorColumn, opt.CursorValue)
+	}
 	return conds, nil
 }
 

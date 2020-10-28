@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/url"
 	"os"
 	"os/user"
 	"strings"
@@ -50,6 +51,10 @@ var (
 		Name: "src_frontend_config_file_watcher_running",
 		Help: "1 if the configuration file overrides watcher is running.",
 	})
+	metricConfigOverrideUpdates = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "src_frontend_config_file_watcher_updates",
+		Help: "Incremented each time the config file is updated.",
+	}, []string{"status"})
 )
 
 // handleConfigOverrides allows environments to forcibly override the
@@ -61,6 +66,7 @@ var (
 // the configuration server is started but after PostgreSQL is connected.
 func handleConfigOverrides() error {
 	ctx := context.Background()
+	log := log15.Root().New("svc", "config.file")
 
 	overrideSiteConfig := os.Getenv("SITE_CONFIG_FILE")
 	overrideExtSvcConfig := os.Getenv("EXTSVC_CONFIG_FILE")
@@ -127,7 +133,7 @@ func handleConfigOverrides() error {
 			return errors.Wrap(err, "parsing EXTSVC_CONFIG_FILE")
 		}
 		if len(rawConfigs) == 0 {
-			log15.Warn("EXTSVC_CONFIG_FILE contains zero external service configurations")
+			log.Warn("EXTSVC_CONFIG_FILE contains zero external service configurations")
 		}
 
 		existing, err := db.ExternalServices.List(ctx, db.ExternalServicesListOptions{
@@ -190,14 +196,14 @@ func handleConfigOverrides() error {
 
 		// Apply the delta update.
 		for extSvc := range toRemove {
-			log15.Debug("Deleting external service", "id", extSvc.ID, "displayName", extSvc.DisplayName)
+			log.Debug("Deleting external service", "id", extSvc.ID, "displayName", extSvc.DisplayName)
 			err := db.ExternalServices.Delete(ctx, extSvc.ID)
 			if err != nil {
 				return errors.Wrap(err, "ExternalServices.Delete")
 			}
 		}
 		for extSvc := range toAdd {
-			log15.Debug("Adding external service", "displayName", extSvc.DisplayName)
+			log.Debug("Adding external service", "displayName", extSvc.DisplayName)
 			if err := db.ExternalServices.Create(ctx, confGet, extSvc); err != nil {
 				return errors.Wrap(err, "ExternalServices.Create")
 			}
@@ -205,7 +211,7 @@ func handleConfigOverrides() error {
 
 		ps := confGet().AuthProviders
 		for id, extSvc := range toUpdate {
-			log15.Debug("Updating external service", "id", id, "displayName", extSvc.DisplayName)
+			log.Debug("Updating external service", "id", id, "displayName", extSvc.DisplayName)
 
 			update := &db.ExternalServiceUpdate{DisplayName: &extSvc.DisplayName, Config: &extSvc.Config}
 			if err := db.ExternalServices.Update(ctx, ps, id, update); err != nil {
@@ -221,20 +227,23 @@ func handleConfigOverrides() error {
 
 		events, err := watchPaths(ctx, overrideSiteConfig, overrideExtSvcConfig, overrideGlobalSettings)
 		if err != nil {
-			log15.Error("failed to watch config override files", "error", err)
+			log.Error("failed to watch config override files", "error", err)
 			return
 		}
 
 		for err := range events {
 			if err != nil {
-				log15.Warn("error while watching config override files", "error", err)
+				log.Warn("error while watching config override files", "error", err)
+				metricConfigOverrideUpdates.WithLabelValues("watch_failed").Inc()
 				continue
 			}
 
 			if err := handleConfigOverrides(); err != nil {
-				log15.Error("failed to update configuration from modified config override file", "error", err)
+				log.Error("failed to update configuration from modified config override file", "error", err)
+				metricConfigOverrideUpdates.WithLabelValues("update_failed").Inc()
 			} else {
-				log15.Info("updated configuration from modified config overrides files")
+				log.Info("updated configuration from modified config override files")
+				metricConfigOverrideUpdates.WithLabelValues("success").Inc()
 			}
 		}
 	})
@@ -331,10 +340,22 @@ func serviceConnections() conftypes.ServiceConnections {
 		}
 
 		serviceConnectionsVal = conftypes.ServiceConnections{
-			GitServers:  gitServers(),
-			PostgresDSN: dbutil.PostgresDSN(username, os.Getenv),
+			GitServers:           gitServers(),
+			PostgresDSN:          dbutil.PostgresDSN("", username, os.Getenv),
+			CodeIntelPostgresDSN: dbutil.PostgresDSN("codeintel", username, os.Getenv),
+		}
+
+		// We set this envvar in development to disable the following check
+		if os.Getenv("CODEINTEL_PG_ALLOW_SINGLE_DB") != "" {
+			return
+		}
+
+		// Ensure that the code intelligence database is not pointing at the frontend database
+		if err := comparePostgresDSNs(serviceConnectionsVal.PostgresDSN, serviceConnectionsVal.CodeIntelPostgresDSN); err != nil {
+			panic(err.Error())
 		}
 	})
+
 	return serviceConnectionsVal
 }
 
@@ -348,4 +369,30 @@ func gitServers() []string {
 		}
 	}
 	return strings.Fields(v)
+}
+
+// comparePostgresDSNs returns an error if one of the given Postgres DSN values are
+// not a valid URL, or if they are both valid URLs but point to the same database.
+// We consider two DSNs to be the same when they specify the same host, port, and
+// path. It's possible that different hosts/ports map to the same physical machine,
+// so we could conceivably return false negatives here and the tricksy site-admin
+// may have pulled the wool over our eyes. This shouldn't actually affect anything
+// operationally in the near-term, but may just make migrations harder when we need
+// to have them manually separate the data.
+func comparePostgresDSNs(dsn1, dsn2 string) error {
+	url1, err := url.Parse(dsn1)
+	if err != nil {
+		return fmt.Errorf("illegal Postgres DSN: %s", dsn1)
+	}
+
+	url2, err := url.Parse(dsn2)
+	if err != nil {
+		return fmt.Errorf("illegal Postgres DSN: %s", dsn2)
+	}
+
+	if url1.Host == url2.Host && url1.Path == url2.Path {
+		return fmt.Errorf("codeintel and frontend databases must be distinct: %s and %s seem to refer to the same database", dsn1, dsn2)
+	}
+
+	return nil
 }

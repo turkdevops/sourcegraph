@@ -5,14 +5,17 @@ import (
 	"fmt"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/keegancsmith/sqlf"
 
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/types"
+	"github.com/sourcegraph/sourcegraph/cmd/repo-updater/repos"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/db/dbconn"
 	"github.com/sourcegraph/sourcegraph/internal/db/dbtesting"
+	"github.com/sourcegraph/sourcegraph/internal/errcode"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
 )
 
@@ -219,6 +222,29 @@ func TestExternalServicesStore_Create(t *testing.T) {
 	}
 }
 
+func TestExternalServicesStore_CreateWithTierEnforcement(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	dbtesting.SetupGlobalTestDB(t)
+
+	ctx := context.Background()
+	confGet := func() *conf.Unified { return &conf.Unified{} }
+	es := &types.ExternalService{
+		Kind:        extsvc.KindGitHub,
+		DisplayName: "GITHUB #1",
+		Config:      `{"url": "https://github.com", "repositoryQuery": ["none"], "token": "abc"}`,
+	}
+	store := &ExternalServicesStore{
+		PreCreateExternalService: func(ctx context.Context) error {
+			return errcode.NewPresentationError("test plan limit exceeded")
+		},
+	}
+	if err := store.Create(ctx, confGet, es); err == nil {
+		t.Fatal("expected an error, got none")
+	}
+}
+
 func TestExternalServicesStore_Update(t *testing.T) {
 	if testing.Short() {
 		t.Skip()
@@ -290,10 +316,10 @@ func TestExternalServicesStore_Delete(t *testing.T) {
 	//  - ID=1 is expected to be deleted along with deletion of the external service.
 	//  - ID=2 remains untouched because it is not associated with the external service.
 	_, err = dbconn.Global.ExecContext(ctx, `
-INSERT INTO repo (id, name, description, language, fork)
-VALUES (1, 'github.com/user/repo', '', '', FALSE);
-INSERT INTO repo (id, name, description, language, fork)
-VALUES (2, 'github.com/user/repo2', '', '', FALSE);
+INSERT INTO repo (id, name, description, fork)
+VALUES (1, 'github.com/user/repo', '', FALSE);
+INSERT INTO repo (id, name, description, fork)
+VALUES (2, 'github.com/user/repo2', '', FALSE);
 `)
 	if err != nil {
 		t.Fatal(err)
@@ -572,5 +598,104 @@ func TestExternalServicesStore_Count(t *testing.T) {
 
 	if count != 1 {
 		t.Fatalf("Want 1 external service but got %d", count)
+	}
+}
+
+func createExternalServices(t *testing.T) map[string]*types.ExternalService {
+	clock := repos.NewFakeClock(time.Now(), 0)
+	now := clock.Now()
+
+	svcs := mkExternalServices(now)
+
+	// Create a new external service
+	confGet := func() *conf.Unified {
+		return &conf.Unified{}
+	}
+
+	// create a few external services
+	for _, svc := range svcs {
+		if err := ExternalServices.Create(context.Background(), confGet, svc); err != nil {
+			t.Fatalf("failed to insert external service %v: %v", svc.DisplayName, err)
+		}
+	}
+
+	services, err := ExternalServices.List(context.Background(), ExternalServicesListOptions{})
+	if err != nil {
+		t.Fatal("failed to list external services")
+	}
+
+	servicesPerKind := make(map[string]*types.ExternalService)
+	for _, svc := range services {
+		servicesPerKind[svc.Kind] = svc
+	}
+
+	return servicesPerKind
+}
+
+func mkExternalServices(now time.Time) []*types.ExternalService {
+	githubSvc := types.ExternalService{
+		Kind:        extsvc.KindGitHub,
+		DisplayName: "Github - Test",
+		Config:      `{"url": "https://github.com", "token": "abc", "repositoryQuery": ["none"]}`,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	gitlabSvc := types.ExternalService{
+		Kind:        extsvc.KindGitLab,
+		DisplayName: "GitLab - Test",
+		Config:      `{"url": "https://gitlab.com", "token": "abc", "projectQuery": ["projects?membership=true&archived=no"]}`,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	bitbucketServerSvc := types.ExternalService{
+		Kind:        extsvc.KindBitbucketServer,
+		DisplayName: "Bitbucket Server - Test",
+		Config:      `{"url": "https://bitbucket.com", "username": "foo", "token": "abc", "repositoryQuery": ["none"]}`,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	bitbucketCloudSvc := types.ExternalService{
+		Kind:        extsvc.KindBitbucketCloud,
+		DisplayName: "Bitbucket Cloud - Test",
+		Config:      `{"url": "https://bitbucket.com", "username": "foo", "appPassword": "abc"}`,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	awsSvc := types.ExternalService{
+		Kind:        extsvc.KindAWSCodeCommit,
+		DisplayName: "AWS Code - Test",
+		Config:      `{"region": "eu-west-1", "accessKeyID": "key", "secretAccessKey": "secret", "gitCredentials": {"username": "foo", "password": "bar"}}`,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	otherSvc := types.ExternalService{
+		Kind:        extsvc.KindOther,
+		DisplayName: "Other - Test",
+		Config:      `{"url": "https://other.com", "repos": ["none"]}`,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	gitoliteSvc := types.ExternalService{
+		Kind:        extsvc.KindGitolite,
+		DisplayName: "Gitolite - Test",
+		Config:      `{"prefix": "foo", "host": "bar"}`,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	return []*types.ExternalService{
+		&githubSvc,
+		&gitlabSvc,
+		&bitbucketServerSvc,
+		&bitbucketCloudSvc,
+		&awsSvc,
+		&otherSvc,
+		&gitoliteSvc,
 	}
 }

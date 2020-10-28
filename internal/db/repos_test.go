@@ -4,13 +4,21 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"testing"
+	"time"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/keegancsmith/sqlf"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/types"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/db/dbtesting"
 	"github.com/sourcegraph/sourcegraph/internal/errcode"
+	"github.com/sourcegraph/sourcegraph/internal/extsvc"
+	"github.com/sourcegraph/sourcegraph/internal/extsvc/github"
+	"github.com/sourcegraph/sourcegraph/internal/extsvc/gitlab"
 )
 
 func TestParseIncludePattern(t *testing.T) {
@@ -18,6 +26,8 @@ func TestParseIncludePattern(t *testing.T) {
 		exact  []string
 		like   []string
 		regexp string
+
+		pattern []*sqlf.Query // only tested if non-nil
 	}{
 		`^$`:              {exact: []string{""}},
 		`(^$)`:            {exact: []string{""}},
@@ -65,6 +75,11 @@ func TestParseIncludePattern(t *testing.T) {
 		// Avoid DoS when there are too many possible matches to enumerate.
 		`^(a|b)(c|d)(e|f)(g|h)(i|j)(k|l)(m|n)$`: {regexp: `^(a|b)(c|d)(e|f)(g|h)(i|j)(k|l)(m|n)$`},
 		`^[0-a]$`:                               {regexp: `^[0-a]$`},
+		`sourcegraph|^github\.com/foo/bar$`: {
+			like:    []string{`%sourcegraph%`},
+			exact:   []string{"github.com/foo/bar"},
+			pattern: []*sqlf.Query{sqlf.Sprintf(`(name IN (%s) OR lower(name) LIKE %s)`, "github.com/foo/bar", "%sourcegraph%")},
+		},
 	}
 	for pattern, want := range tests {
 		exact, like, regexp, err := parseIncludePattern(pattern)
@@ -82,11 +97,26 @@ func TestParseIncludePattern(t *testing.T) {
 		}
 		if qs, err := parsePattern(pattern); err != nil {
 			t.Fatal(pattern, err)
-		} else if testing.Verbose() {
-			q := sqlf.Join(qs, "AND")
-			t.Log(pattern, q.Query(sqlf.PostgresBindVar), q.Args())
+		} else {
+			if testing.Verbose() {
+				q := sqlf.Join(qs, "AND")
+				t.Log(pattern, q.Query(sqlf.PostgresBindVar), q.Args())
+			}
+
+			if want.pattern != nil {
+				want := queriesToString(want.pattern)
+				q := queriesToString(qs)
+				if want != q {
+					t.Errorf("got pattern %q, want %q for %s", q, want, pattern)
+				}
+			}
 		}
 	}
+}
+
+func queriesToString(qs []*sqlf.Query) string {
+	q := sqlf.Join(qs, "AND")
+	return fmt.Sprintf("%s %v", q.Query(sqlf.PostgresBindVar), q.Args())
 }
 
 func TestRepos_Count(t *testing.T) {
@@ -102,6 +132,39 @@ func TestRepos_Count(t *testing.T) {
 	} else if want := 0; count != want {
 		t.Errorf("got %d, want %d", count, want)
 	}
+
+	if err := Repos.Upsert(ctx, InsertRepoOp{Name: "myrepo", Description: "", Fork: false}); err != nil {
+		t.Fatal(err)
+	}
+
+	if count, err := Repos.Count(ctx, ReposListOptions{}); err != nil {
+		t.Fatal(err)
+	} else if want := 1; count != want {
+		t.Errorf("got %d, want %d", count, want)
+	}
+
+	repos, err := Repos.List(ctx, ReposListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Repos.Delete(ctx, repos[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if count, err := Repos.Count(ctx, ReposListOptions{}); err != nil {
+		t.Fatal(err)
+	} else if want := 0; count != want {
+		t.Errorf("got %d, want %d", count, want)
+	}
+}
+
+func TestRepos_Delete(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	dbtesting.SetupGlobalTestDB(t)
+	ctx := context.Background()
+	ctx = actor.WithActor(ctx, &actor.Actor{UID: 1, Internal: true})
 
 	if err := Repos.Upsert(ctx, InsertRepoOp{Name: "myrepo", Description: "", Fork: false}); err != nil {
 		t.Fatal(err)
@@ -241,4 +304,99 @@ func TestRepos_UpsertForkAndArchivedFields(t *testing.T) {
 			}
 		}
 	}
+}
+
+func hasNoID(r *types.Repo) bool {
+	return r.ID == 0
+}
+
+func TestRepos_Create(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	dbtesting.SetupGlobalTestDB(t)
+	ctx := context.Background()
+	ctx = actor.WithActor(ctx, &actor.Actor{UID: 1, Internal: true})
+
+	now, err := time.Parse(time.RFC3339, "2020-10-27T8:40:00Z")
+	if err != nil {
+		t.Fatalf("Time error: %v", err)
+	}
+
+	servicesPerKind := createExternalServices(t)
+
+	repo1 := types.Repo{
+		Name: "github.com/foo/bar",
+		ExternalRepo: api.ExternalRepoSpec{
+			ID:          "AAAAA==",
+			ServiceType: "github",
+			ServiceID:   "http://github.com",
+		},
+		RepoFields: &types.RepoFields{
+			URI:         "github.com/foo/bar",
+			Description: "The description",
+			CreatedAt:   now,
+			Sources: map[string]*types.SourceInfo{
+				servicesPerKind[extsvc.KindGitHub].URN(): {
+					ID:       servicesPerKind[extsvc.KindGitHub].URN(),
+					CloneURL: "git@github.com:foo/bar.git",
+				},
+				servicesPerKind[extsvc.KindBitbucketServer].URN(): {
+					ID:       servicesPerKind[extsvc.KindBitbucketServer].URN(),
+					CloneURL: "git@bitbucketserver.mycorp.com:foo/bar.git",
+				},
+			},
+			Metadata: new(github.Repository),
+		},
+	}
+
+	repo2 := types.Repo{
+		Name: "gitlab.com/foo/bar",
+		ExternalRepo: api.ExternalRepoSpec{
+			ID:          "1234",
+			ServiceType: extsvc.TypeGitLab,
+			ServiceID:   "http://gitlab.com",
+		},
+		RepoFields: &types.RepoFields{
+			URI:         "gitlab.com/foo/bar",
+			Description: "The description",
+			CreatedAt:   now,
+			Sources: map[string]*types.SourceInfo{
+				servicesPerKind[extsvc.KindGitLab].URN(): {
+					ID:       servicesPerKind[extsvc.KindGitLab].URN(),
+					CloneURL: "git@gitlab.com:foo/bar.git",
+				},
+			},
+			Metadata: new(gitlab.Project),
+		},
+	}
+
+	t.Run("no repos should not fail", func(t *testing.T) {
+		if err := Repos.Create(ctx); err != nil {
+			t.Fatalf("Create error: %s", err)
+		}
+	})
+
+	t.Run("many repos", func(t *testing.T) {
+		want := generateRepos(7, &repo1, &repo2)
+
+		if err := Repos.Create(ctx, want...); err != nil {
+			t.Fatalf("Create error: %s", err)
+		}
+
+		sort.Sort(want)
+
+		if noID := want.Filter(hasNoID); len(noID) > 0 {
+			t.Fatalf("Create didn't assign an ID to all repos: %v", noID.Names())
+		}
+
+		have, err := Repos.List(ctx, ReposListOptions{})
+		if err != nil {
+			t.Fatalf("List error: %s", err)
+		}
+
+		if diff := cmp.Diff(have, []*types.Repo(want), cmpopts.EquateEmpty()); diff != "" {
+			t.Fatalf("List:\n%s", diff)
+		}
+	})
 }

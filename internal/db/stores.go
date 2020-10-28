@@ -4,9 +4,10 @@ var (
 	AccessTokens     = &accessTokens{}
 	ExternalServices = &ExternalServicesStore{}
 	DefaultRepos     = &defaultRepos{}
-	Repos            = &repos{}
+	Repos            = &RepoStore{}
 	Phabricator      = &phabricator{}
 	QueryRunnerState = &queryRunnerState{}
+	Namespaces       = &namespaces{}
 	Orgs             = &orgs{}
 	OrgMembers       = &orgMembers{}
 	SavedSearches    = &savedSearches{}

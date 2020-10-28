@@ -893,7 +893,7 @@ loop:
 				parameter.Negated = true
 				parameter.Annotation.Range = newRange(start, p.pos)
 				nodes = append(nodes, parameter)
-				break loop
+				continue
 			}
 			pattern := p.ParsePatternLiteral()
 			pattern.Negated = true
@@ -997,7 +997,7 @@ loop:
 				parameter.Negated = true
 				parameter.Annotation.Range = newRange(start, p.pos)
 				nodes = append(nodes, parameter)
-				break loop
+				continue
 			}
 			pattern := p.ParsePatternRegexp()
 			pattern.Negated = true
@@ -1214,20 +1214,15 @@ func ProcessAndOr(in string, options ParserOptions) (QueryInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	query = Map(query, LowercaseFieldNames, SubstituteAliases)
 
 	switch options.SearchType {
 	case SearchTypeLiteral:
-		query = substituteConcat(query, " ")
+		query = Map(query, substituteConcat(space))
 	case SearchTypeStructural:
-		if containsNegatedPattern(query) {
-			return nil, errors.New("the query contains a negated search pattern. Structural search does not support negated search patterns at the moment")
-		}
-		query = substituteConcat(query, " ")
-		query = ellipsesForHoles(query)
+		query = Map(query, labelStructural, ellipsesForHoles, substituteConcat(space))
 	case SearchTypeRegex:
-		query = Map(query, EmptyGroupsToLiteral, TrailingParensToLiteral)
+		query = Map(query, escapeParensHeuristic, substituteConcat(fuzzyRegexp))
 	}
 
 	if options.Globbing {
@@ -1237,11 +1232,11 @@ func ProcessAndOr(in string, options ParserOptions) (QueryInfo, error) {
 		}
 	}
 
-	err = validate(query)
-	if err != nil {
-		return nil, err
+	for _, disjunct := range Dnf(query) {
+		err = validate(disjunct)
+		if err != nil {
+			return nil, err
+		}
 	}
-	query = concatRevFilters(query)
-
 	return &AndOrQuery{Query: query}, nil
 }
