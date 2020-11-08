@@ -135,7 +135,7 @@
     "@types/mocha": "8.0.3",
     "@types/mockdate": "2.0.0",
     "@types/mz": "2.7.1",
-    "@types/node": "13.13.5",
+    "@types/node": "13.13.26",
     "@types/optimize-css-assets-webpack-plugin": "5.0.1",
     "@types/pollyjs__core": "4.3.0",
     "@types/pollyjs__persister-fs": "2.0.0",
