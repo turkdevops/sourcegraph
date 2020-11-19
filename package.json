@@ -102,7 +102,7 @@
     "@storybook/addon-storyshots": "^6.0.26",
     "@storybook/addon-storyshots-puppeteer": "^6.0.26",
     "@storybook/addons": "^6.0.26",
-    "@storybook/components": "^6.0.26",
+    "@storybook/components": "^6.1.0",
     "@storybook/core": "^6.0.26",
     "@storybook/react": "^6.0.26",
     "@storybook/theming": "^6.0.26",
