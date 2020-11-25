@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/keegancsmith/sqlf"
@@ -17,14 +16,15 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/xeipuuv/gojsonschema"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/types"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/envvar"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/db/basestore"
 	"github.com/sourcegraph/sourcegraph/internal/db/dbconn"
 	"github.com/sourcegraph/sourcegraph/internal/db/dbutil"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
 	"github.com/sourcegraph/sourcegraph/internal/jsonc"
-	"github.com/sourcegraph/sourcegraph/internal/secret"
+	"github.com/sourcegraph/sourcegraph/internal/timeutil"
+	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/schema"
 )
 
@@ -168,7 +168,7 @@ func (e *ExternalServiceStore) ValidateConfig(ctx context.Context, opt ValidateE
 			return errors.New("users are only allowed to add external service for https://github.com/, https://gitlab.com/ and https://bitbucket.org/")
 		}
 
-		disallowedFields := []string{"repositoryPathPattern", "nameTransformations"}
+		disallowedFields := []string{"repositoryPathPattern", "nameTransformations", "rateLimit"}
 		results := gjson.GetMany(opt.Config, disallowedFields...)
 		for i, r := range results {
 			if r.Exists() {
@@ -293,6 +293,11 @@ func (e *ExternalServiceStore) validateGitHubConnection(ctx context.Context, id 
 
 	err = multierror.Append(err, e.validateDuplicateRateLimits(ctx, id, extsvc.KindGitHub, c))
 
+	if envvar.SourcegraphDotComMode() && c.CloudGlobal {
+		// We're setting this one to global, make sure it's the only one
+		err = multierror.Append(err, e.validateSingleGlobalConnection(ctx, id, extsvc.KindGitHub))
+	}
+
 	return err.ErrorOrNil()
 }
 
@@ -303,6 +308,11 @@ func (e *ExternalServiceStore) validateGitLabConnection(ctx context.Context, id 
 	}
 
 	err = multierror.Append(err, e.validateDuplicateRateLimits(ctx, id, extsvc.KindGitLab, c))
+
+	if envvar.SourcegraphDotComMode() && c.CloudGlobal {
+		// We're setting this one to global, make sure it's the only one
+		err = multierror.Append(err, e.validateSingleGlobalConnection(ctx, id, extsvc.KindGitLab))
+	}
 
 	return err.ErrorOrNil()
 }
@@ -324,6 +334,52 @@ func (e *ExternalServiceStore) validateBitbucketServerConnection(ctx context.Con
 
 func (e *ExternalServiceStore) validateBitbucketCloudConnection(ctx context.Context, id int64, c *schema.BitbucketCloudConnection) error {
 	return e.validateDuplicateRateLimits(ctx, id, extsvc.KindBitbucketCloud, c)
+}
+
+// validateSingleGlobalConnection returns an error if more than one external service for the given kind has its
+// CloudGlobal flag set.
+func (e *ExternalServiceStore) validateSingleGlobalConnection(ctx context.Context, id int64, kind string) error {
+	opt := ExternalServicesListOptions{
+		Kinds: []string{kind},
+		// We only care about site admin external services
+		NoNamespace: true,
+		LimitOffset: &LimitOffset{
+			Limit: 500, // The number is randomly chosen
+		},
+	}
+	for {
+		svcs, err := e.List(ctx, opt)
+		if err != nil {
+			return errors.Wrap(err, "list")
+		}
+		if len(svcs) == 0 {
+			// No more results, exiting
+			return nil
+		}
+		opt.AfterID = svcs[len(svcs)-1].ID // Advance the cursor
+
+		for _, svc := range svcs {
+			c, err := extsvc.ParseConfig(svc.Kind, svc.Config)
+			if err != nil {
+				return errors.Wrap(err, "parsing config")
+			}
+			var storedIsGlobal bool
+			switch x := c.(type) {
+			case *schema.GitHubConnection:
+				storedIsGlobal = x.CloudGlobal
+			case *schema.GitLabConnection:
+				storedIsGlobal = x.CloudGlobal
+			}
+			if svc.ID != id && storedIsGlobal {
+				return fmt.Errorf("existing external service, %q, already set as global", svc.DisplayName)
+			}
+		}
+
+		if len(svcs) < opt.Limit {
+			break // Less results than limit means we've reached end
+		}
+	}
+	return nil
 }
 
 // validateDuplicateRateLimits returns an error if given config has duplicated non-default rate limit
@@ -404,7 +460,7 @@ func (e *ExternalServiceStore) Create(ctx context.Context, confGet func() *conf.
 		return err
 	}
 
-	es.CreatedAt = time.Now().UTC().Truncate(time.Microsecond)
+	es.CreatedAt = timeutil.Now()
 	es.UpdatedAt = es.CreatedAt
 
 	// Prior to saving the record, run a validation hook.
@@ -419,7 +475,7 @@ func (e *ExternalServiceStore) Create(ctx context.Context, confGet func() *conf.
 	return e.Store.Handle().DB().QueryRowContext(
 		ctx,
 		"INSERT INTO external_services(kind, display_name, config, created_at, updated_at, namespace_user_id, unrestricted) VALUES($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-		es.Kind, es.DisplayName, secret.StringValue{S: &es.Config}, es.CreatedAt, es.UpdatedAt, nullInt32Column(es.NamespaceUserID), es.Unrestricted,
+		es.Kind, es.DisplayName, es.Config, es.CreatedAt, es.UpdatedAt, nullInt32Column(es.NamespaceUserID), es.Unrestricted,
 	).Scan(&es.ID)
 }
 
@@ -450,7 +506,7 @@ func (e *ExternalServiceStore) Upsert(ctx context.Context, svcs ...*types.Extern
 			&svcs[i].ID,
 			&svcs[i].Kind,
 			&svcs[i].DisplayName,
-			&secret.StringValue{S: &svcs[i].Config},
+			&svcs[i].Config,
 			&svcs[i].CreatedAt,
 			&dbutil.NullTime{Time: &svcs[i].UpdatedAt},
 			&dbutil.NullTime{Time: &svcs[i].DeletedAt},
@@ -592,7 +648,7 @@ func (e *ExternalServiceStore) Update(ctx context.Context, ps []schema.AuthProvi
 
 	if update.Config != nil {
 		unrestricted := !gjson.Get(*update.Config, "authorization").Exists()
-		q := sqlf.Sprintf(`config = %s, next_sync_at = NOW(), unrestricted = %s`, secret.StringValue{S: update.Config}, unrestricted)
+		q := sqlf.Sprintf(`config = %s, next_sync_at = NOW(), unrestricted = %s`, update.Config, unrestricted)
 		if err := execUpdate(ctx, tx.DB(), q); err != nil {
 			return err
 		}
@@ -721,7 +777,7 @@ func (e *ExternalServiceStore) list(ctx context.Context, conds []*sqlf.Query, li
 			nextSyncAt      sql.NullTime
 			namespaceUserID sql.NullInt32
 		)
-		if err := rows.Scan(&h.ID, &h.Kind, &h.DisplayName, &secret.StringValue{S: &h.Config}, &h.CreatedAt, &h.UpdatedAt, &deletedAt, &lastSyncAt, &nextSyncAt, &namespaceUserID, &h.Unrestricted); err != nil {
+		if err := rows.Scan(&h.ID, &h.Kind, &h.DisplayName, &h.Config, &h.CreatedAt, &h.UpdatedAt, &deletedAt, &lastSyncAt, &nextSyncAt, &namespaceUserID, &h.Unrestricted); err != nil {
 			return nil, err
 		}
 

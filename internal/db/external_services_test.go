@@ -12,13 +12,13 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/keegancsmith/sqlf"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/types"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/db/dbconn"
 	"github.com/sourcegraph/sourcegraph/internal/db/dbtesting"
 	"github.com/sourcegraph/sourcegraph/internal/errcode"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
+	"github.com/sourcegraph/sourcegraph/internal/types"
 )
 
 func TestExternalServicesListOptions_sqlConditions(t *testing.T) {
@@ -166,18 +166,32 @@ func TestExternalServicesStore_ValidateConfig(t *testing.T) {
 			wantErr:      `users are only allowed to add external service for https://github.com/, https://gitlab.com/ and https://bitbucket.org/`,
 		},
 		{
+			name:         "gjson handles comments",
+			kind:         extsvc.KindGitHub,
+			config:       `{"url": "https://github.com", "token": "abc", "repositoryQuery": ["affiliated"]} // comment`,
+			hasNamespace: true,
+			wantErr:      "<nil>",
+		},
+		{
 			name:         "prevent disallowed repositoryPathPattern field",
 			kind:         extsvc.KindGitHub,
-			config:       `{"url": "https://github.com", "repositoryPathPattern": "github/{nameWithOwner}" // comments}`,
+			config:       `{"url": "https://github.com", "repositoryPathPattern": "github/{nameWithOwner}"}`,
 			hasNamespace: true,
 			wantErr:      `field "repositoryPathPattern" is not allowed in a user-added external service`,
 		},
 		{
 			name:         "prevent disallowed nameTransformations field",
 			kind:         extsvc.KindGitHub,
-			config:       `{"url": "https://github.com", "nameTransformations": [{"regex": "\\.d/","replacement": "/"},{"regex": "-git$","replacement": ""}] // comments}`,
+			config:       `{"url": "https://github.com", "nameTransformations": [{"regex": "\\.d/","replacement": "/"},{"regex": "-git$","replacement": ""}]}`,
 			hasNamespace: true,
 			wantErr:      `field "nameTransformations" is not allowed in a user-added external service`,
+		},
+		{
+			name:         "prevent disallowed rateLimit field",
+			kind:         extsvc.KindGitHub,
+			config:       `{"url": "https://github.com", "rateLimit": {}}`,
+			hasNamespace: true,
+			wantErr:      `field "rateLimit" is not allowed in a user-added external service`,
 		},
 	}
 	for _, test := range tests {
@@ -776,6 +790,61 @@ func TestExternalServicesStore_Upsert(t *testing.T) {
 
 		if diff := cmp.Diff(have, []*types.ExternalService(nil), cmpopts.EquateEmpty()); diff != "" {
 			t.Errorf("List:\n%s", diff)
+		}
+	})
+}
+
+func TestExternalServicesStore_ValidateSingleGlobalConnection(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	dbtesting.SetupGlobalTestDB(t)
+	ctx := context.Background()
+
+	now := time.Now()
+
+	makeService := func(global bool) *types.ExternalService {
+		cfg := `{"url": "https://github.com", "token": "abc", "repositoryQuery": ["none"]}`
+		if global {
+			cfg = `{"url": "https://github.com", "token": "abc", "repositoryQuery": ["none"], "cloudGlobal": true}`
+		}
+		svc := &types.ExternalService{
+			Kind:        extsvc.KindGitHub,
+			DisplayName: "Github - Test",
+			Config:      cfg,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		return svc
+	}
+
+	t.Run("non global", func(t *testing.T) {
+		gh := makeService(false)
+		if err := ExternalServices.Upsert(ctx, gh); err != nil {
+			t.Fatalf("Upsert error: %s", err)
+		}
+		if err := ExternalServices.validateSingleGlobalConnection(ctx, gh.ID, extsvc.KindGitHub); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("first global", func(t *testing.T) {
+		gh := makeService(true)
+		if err := ExternalServices.Upsert(ctx, gh); err != nil {
+			t.Fatalf("Upsert error: %s", err)
+		}
+		if err := ExternalServices.validateSingleGlobalConnection(ctx, gh.ID, extsvc.KindGitHub); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("second global", func(t *testing.T) {
+		gh := makeService(true)
+		if err := ExternalServices.Upsert(ctx, gh); err != nil {
+			t.Fatalf("Upsert error: %s", err)
+		}
+		if err := ExternalServices.validateSingleGlobalConnection(ctx, gh.ID, extsvc.KindGitHub); err == nil {
+			t.Fatal("Expected validation error")
 		}
 	})
 }

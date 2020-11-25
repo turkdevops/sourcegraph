@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/types"
 	"github.com/sourcegraph/sourcegraph/cmd/repo-updater/repos"
 	ct "github.com/sourcegraph/sourcegraph/enterprise/internal/campaigns/testing"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
@@ -23,6 +23,8 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/github"
 	"github.com/sourcegraph/sourcegraph/internal/repoupdater"
+	"github.com/sourcegraph/sourcegraph/internal/timeutil"
+	"github.com/sourcegraph/sourcegraph/internal/types"
 )
 
 func init() {
@@ -195,7 +197,7 @@ func TestService(t *testing.T) {
 		t.Fatal("user is admin, want non-admin")
 	}
 
-	now := time.Now().UTC().Truncate(time.Microsecond)
+	now := timeutil.Now()
 	clock := func() time.Time { return now }
 
 	store := NewStoreWithClock(dbconn.Global, clock)
@@ -340,12 +342,12 @@ func TestService(t *testing.T) {
 			t.Fatal("MockEnqueueChangesetSync not called")
 		}
 
-		// Repo filtered out by authzFilter
-		ct.AuthzFilterRepos(t, rs[0].ID)
+		// rs[0] is filtered out
+		ct.MockRepoPermissions(t, user.ID, rs[1].ID, rs[2].ID, rs[3].ID)
 
 		// should result in a not found error
 		if err := svc.EnqueueChangesetSync(ctx, changeset.ID); !errcode.IsNotFound(err) {
-			t.Fatalf("expected not-found error but got %s", err)
+			t.Fatalf("expected not-found error but got %v", err)
 		}
 	})
 
@@ -362,6 +364,7 @@ func TestService(t *testing.T) {
 		}
 
 		adminCtx := actor.WithActor(context.Background(), actor.FromUser(admin.ID))
+		userCtx := actor.WithActor(context.Background(), actor.FromUser(user.ID))
 
 		t.Run("success", func(t *testing.T) {
 			opts := CreateCampaignSpecOpts{
@@ -430,16 +433,15 @@ func TestService(t *testing.T) {
 		})
 
 		t.Run("missing repository permissions", func(t *testing.T) {
-			// Single repository filtered out by authzFilter
-			ct.AuthzFilterRepos(t, changesetSpecs[0].RepoID)
+			ct.MockRepoPermissions(t, user.ID)
 
 			opts := CreateCampaignSpecOpts{
-				NamespaceUserID:      admin.ID,
+				NamespaceUserID:      user.ID,
 				RawSpec:              ct.TestRawCampaignSpec,
 				ChangesetSpecRandIDs: changesetSpecRandIDs,
 			}
 
-			if _, err := svc.CreateCampaignSpec(adminCtx, opts); !errcode.IsNotFound(err) {
+			if _, err := svc.CreateCampaignSpec(userCtx, opts); !errcode.IsNotFound(err) {
 				t.Fatalf("expected not-found error but got %s", err)
 			}
 		})
@@ -581,12 +583,11 @@ func TestService(t *testing.T) {
 		})
 
 		t.Run("missing repository permissions", func(t *testing.T) {
-			// Single repository filtered out by authzFilter
-			ct.AuthzFilterRepos(t, repo.ID)
+			ct.MockRepoPermissions(t, user.ID, rs[1].ID, rs[2].ID, rs[3].ID)
 
 			_, err := svc.CreateChangesetSpec(ctx, rawSpec, admin.ID)
 			if !errcode.IsNotFound(err) {
-				t.Fatalf("expected not-found error but got %s", err)
+				t.Fatalf("expected not-found error but got %v", err)
 			}
 		})
 	})
@@ -718,7 +719,7 @@ func TestService(t *testing.T) {
 	t.Run("GetCampaignMatchingCampaignSpec", func(t *testing.T) {
 		campaignSpec := createCampaignSpec(t, ctx, store, "matching-campaign-spec", admin.ID)
 
-		haveCampaign, err := svc.GetCampaignMatchingCampaignSpec(ctx, store, campaignSpec)
+		haveCampaign, err := svc.GetCampaignMatchingCampaignSpec(ctx, campaignSpec)
 		if err != nil {
 			t.Fatalf("unexpected error: %s\n", err)
 		}
@@ -740,7 +741,7 @@ func TestService(t *testing.T) {
 			t.Fatalf("failed to create campaign: %s\n", err)
 		}
 
-		haveCampaign, err = svc.GetCampaignMatchingCampaignSpec(ctx, store, campaignSpec)
+		haveCampaign, err = svc.GetCampaignMatchingCampaignSpec(ctx, campaignSpec)
 		if err != nil {
 			t.Fatalf("unexpected error: %s\n", err)
 		}

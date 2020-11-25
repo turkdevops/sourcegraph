@@ -4,7 +4,7 @@ import { CampaignListPage } from './CampaignListPage'
 import { NOOP_TELEMETRY_SERVICE } from '../../../../../shared/src/telemetry/telemetryService'
 import { of } from 'rxjs'
 import { shallow } from 'enzyme'
-import { nodes } from './CampaignNode.story'
+import { nodes } from './testData'
 
 const history = H.createMemoryHistory()
 
@@ -18,9 +18,12 @@ describe('CampaignListPage', () => {
                         location={history.location}
                         queryCampaigns={() =>
                             of({
+                                campaigns: {
+                                    totalCount: Object.values(nodes).length,
+                                    nodes: Object.values(nodes),
+                                    pageInfo: { endCursor: null, hasNextPage: false },
+                                },
                                 totalCount: Object.values(nodes).length,
-                                nodes: Object.values(nodes),
-                                pageInfo: { endCursor: null, hasNextPage: false },
                             })
                         }
                         telemetryService={NOOP_TELEMETRY_SERVICE}
@@ -36,9 +39,12 @@ describe('CampaignListPage', () => {
                         location={history.location}
                         queryCampaigns={() =>
                             of({
+                                campaigns: {
+                                    totalCount: Object.values(nodes).length,
+                                    nodes: Object.values(nodes),
+                                    pageInfo: { endCursor: null, hasNextPage: false },
+                                },
                                 totalCount: Object.values(nodes).length,
-                                nodes: Object.values(nodes),
-                                pageInfo: { endCursor: null, hasNextPage: false },
                             })
                         }
                         telemetryService={NOOP_TELEMETRY_SERVICE}

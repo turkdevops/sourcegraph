@@ -393,6 +393,40 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 ```
 
 <br />
+## frontend: codeintel_resolvers_99th_percentile_duration
+
+<p class="subtitle">code-intel: 99th percentile successful resolvers operation duration over 5m</p>**Descriptions:**
+
+- _frontend: 20s+ 99th percentile successful resolvers operation duration over 5m_
+
+**Possible solutions:**
+
+- **Silence this alert:** If you are aware of this alert and want to silence notifications for it, add the following to your site configuration and set a reminder to re-evaluate the alert:
+
+```json
+"observability.silenceAlerts": [
+  "warning_frontend_codeintel_resolvers_99th_percentile_duration"
+]
+```
+
+<br />
+## frontend: codeintel_resolvers_errors
+
+<p class="subtitle">code-intel: resolvers errors every 5m</p>**Descriptions:**
+
+- _frontend: 20+ resolvers errors every 5m_
+
+**Possible solutions:**
+
+- **Silence this alert:** If you are aware of this alert and want to silence notifications for it, add the following to your site configuration and set a reminder to re-evaluate the alert:
+
+```json
+"observability.silenceAlerts": [
+  "warning_frontend_codeintel_resolvers_errors"
+]
+```
+
+<br />
 ## frontend: codeintel_api_99th_percentile_duration
 
 <p class="subtitle">code-intel: 99th percentile successful api operation duration over 5m</p>**Descriptions:**
@@ -613,57 +647,6 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 ```json
 "observability.silenceAlerts": [
   "warning_frontend_internal_api_error_responses"
-]
-```
-
-<br />
-## frontend: 99th_percentile_precise_code_intel_bundle_manager_query_duration
-
-<p class="subtitle">code-intel: 99th percentile successful precise-code-intel-bundle-manager query duration over 5m</p>**Descriptions:**
-
-- _frontend: 20s+ 99th percentile successful precise-code-intel-bundle-manager query duration over 5m_
-
-**Possible solutions:**
-
-- **Silence this alert:** If you are aware of this alert and want to silence notifications for it, add the following to your site configuration and set a reminder to re-evaluate the alert:
-
-```json
-"observability.silenceAlerts": [
-  "warning_frontend_99th_percentile_precise_code_intel_bundle_manager_query_duration"
-]
-```
-
-<br />
-## frontend: 99th_percentile_precise_code_intel_bundle_manager_transfer_duration
-
-<p class="subtitle">code-intel: 99th percentile successful precise-code-intel-bundle-manager data transfer duration over 5m</p>**Descriptions:**
-
-- _frontend: 300s+ 99th percentile successful precise-code-intel-bundle-manager data transfer duration over 5m_
-
-**Possible solutions:**
-
-- **Silence this alert:** If you are aware of this alert and want to silence notifications for it, add the following to your site configuration and set a reminder to re-evaluate the alert:
-
-```json
-"observability.silenceAlerts": [
-  "warning_frontend_99th_percentile_precise_code_intel_bundle_manager_transfer_duration"
-]
-```
-
-<br />
-## frontend: precise_code_intel_bundle_manager_error_responses
-
-<p class="subtitle">code-intel: precise-code-intel-bundle-manager error responses every 5m</p>**Descriptions:**
-
-- _frontend: 5%+ precise-code-intel-bundle-manager error responses every 5m for 15m0s_
-
-**Possible solutions:**
-
-- **Silence this alert:** If you are aware of this alert and want to silence notifications for it, add the following to your site configuration and set a reminder to re-evaluate the alert:
-
-```json
-"observability.silenceAlerts": [
-  "warning_frontend_precise_code_intel_bundle_manager_error_responses"
 ]
 ```
 
@@ -2214,24 +2197,6 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 ```
 
 <br />
-## repo-updater: syncer_sync_last_time
-
-<p class="subtitle">cloud: time since last sync</p>**Descriptions:**
-
-- _repo-updater: 3600s+ time since last sync for 5m0s_
-
-**Possible solutions:**
-
-- Make sure there are external services added with valid tokens
-- **Silence this alert:** If you are aware of this alert and want to silence notifications for it, add the following to your site configuration and set a reminder to re-evaluate the alert:
-
-```json
-"observability.silenceAlerts": [
-  "warning_repo-updater_syncer_sync_last_time"
-]
-```
-
-<br />
 ## repo-updater: src_repoupdater_max_sync_backoff
 
 <p class="subtitle">cloud: time since oldest sync</p>**Descriptions:**
@@ -2240,7 +2205,13 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 
 **Possible solutions:**
 
-- Make sure there are external services added with valid tokens
+- An alert here indicates that no code host connections have synced in at least 9h0m0s. This indicates that there could be a configuration issue
+with your code hosts connections or networking issues affecting communication with your code hosts.
+- Check the code host status indicator (cloud icon in top right of Sourcegraph homepage) for errors.
+- Make sure external services do not have invalid tokens by navigating to them in the web UI and clicking save. If there are no errors, they are valid.
+- Check the repo-updater logs for errors about syncing.
+- Confirm that outbound network connections are allowed where repo-updater is deployed.
+- Check back in an hour to see if the issue has resolved itself.
 - **Silence this alert:** If you are aware of this alert and want to silence notifications for it, add the following to your site configuration and set a reminder to re-evaluate the alert:
 
 ```json
@@ -2390,24 +2361,6 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 ```json
 "observability.silenceAlerts": [
   "warning_repo-updater_sched_auto_fetch"
-]
-```
-
-<br />
-## repo-updater: sched_manual_fetch
-
-<p class="subtitle">cloud: repositories scheduled due to user traffic</p>**Descriptions:**
-
-- _repo-updater: less than 0 repositories scheduled due to user traffic for 9h0m0s_
-
-**Possible solutions:**
-
-- Check repo-updater logs. This is expected to fire if there are no user added code hosts
-- **Silence this alert:** If you are aware of this alert and want to silence notifications for it, add the following to your site configuration and set a reminder to re-evaluate the alert:
-
-```json
-"observability.silenceAlerts": [
-  "warning_repo-updater_sched_manual_fetch"
 ]
 ```
 
@@ -2572,24 +2525,6 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 ```json
 "observability.silenceAlerts": [
   "warning_repo-updater_perms_syncer_queue_size"
-]
-```
-
-<br />
-## repo-updater: authz_filter_duration
-
-<p class="subtitle">cloud: 95th authorization duration</p>**Descriptions:**
-
-- _repo-updater: 1s+ 95th authorization duration for 1m0s_
-
-**Possible solutions:**
-
-- Check if database is overloaded.
-- **Silence this alert:** If you are aware of this alert and want to silence notifications for it, add the following to your site configuration and set a reminder to re-evaluate the alert:
-
-```json
-"observability.silenceAlerts": [
-  "critical_repo-updater_authz_filter_duration"
 ]
 ```
 
@@ -3455,7 +3390,7 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 <br />
 ## syntect-server: syntax_highlighting_errors
 
-<p class="subtitle">code-intel: syntax highlighting errors every 5m</p>**Descriptions:**
+<p class="subtitle">cloud: syntax highlighting errors every 5m</p>**Descriptions:**
 
 - _syntect-server: 5%+ syntax highlighting errors every 5m for 5m0s_
 
@@ -3472,7 +3407,7 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 <br />
 ## syntect-server: syntax_highlighting_timeouts
 
-<p class="subtitle">code-intel: syntax highlighting timeouts every 5m</p>**Descriptions:**
+<p class="subtitle">cloud: syntax highlighting timeouts every 5m</p>**Descriptions:**
 
 - _syntect-server: 5%+ syntax highlighting timeouts every 5m for 5m0s_
 
@@ -3489,7 +3424,7 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 <br />
 ## syntect-server: syntax_highlighting_panics
 
-<p class="subtitle">code-intel: syntax highlighting panics every 5m</p>**Descriptions:**
+<p class="subtitle">cloud: syntax highlighting panics every 5m</p>**Descriptions:**
 
 - _syntect-server: 5+ syntax highlighting panics every 5m_
 
@@ -3506,7 +3441,7 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 <br />
 ## syntect-server: syntax_highlighting_worker_deaths
 
-<p class="subtitle">code-intel: syntax highlighter worker deaths every 5m</p>**Descriptions:**
+<p class="subtitle">cloud: syntax highlighter worker deaths every 5m</p>**Descriptions:**
 
 - _syntect-server: 1+ syntax highlighter worker deaths every 5m_
 
@@ -3523,7 +3458,7 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 <br />
 ## syntect-server: container_cpu_usage
 
-<p class="subtitle">code-intel: container cpu usage total (1m average) across all cores by instance</p>**Descriptions:**
+<p class="subtitle">cloud: container cpu usage total (1m average) across all cores by instance</p>**Descriptions:**
 
 - _syntect-server: 99%+ container cpu usage total (1m average) across all cores by instance_
 
@@ -3542,7 +3477,7 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 <br />
 ## syntect-server: container_memory_usage
 
-<p class="subtitle">code-intel: container memory usage by instance</p>**Descriptions:**
+<p class="subtitle">cloud: container memory usage by instance</p>**Descriptions:**
 
 - _syntect-server: 99%+ container memory usage by instance_
 
@@ -3561,7 +3496,7 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 <br />
 ## syntect-server: container_restarts
 
-<p class="subtitle">code-intel: container restarts every 5m by instance</p>**Descriptions:**
+<p class="subtitle">cloud: container restarts every 5m by instance</p>**Descriptions:**
 
 - _syntect-server: 1+ container restarts every 5m by instance_
 
@@ -3584,7 +3519,7 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 <br />
 ## syntect-server: fs_inodes_used
 
-<p class="subtitle">code-intel: fs inodes in use by instance</p>**Descriptions:**
+<p class="subtitle">cloud: fs inodes in use by instance</p>**Descriptions:**
 
 - _syntect-server: 3e+06+ fs inodes in use by instance_
 
@@ -3603,7 +3538,7 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 <br />
 ## syntect-server: provisioning_container_cpu_usage_long_term
 
-<p class="subtitle">code-intel: container cpu usage total (90th percentile over 1d) across all cores by instance</p>**Descriptions:**
+<p class="subtitle">cloud: container cpu usage total (90th percentile over 1d) across all cores by instance</p>**Descriptions:**
 
 - _syntect-server: 80%+ or less than 10% container cpu usage total (90th percentile over 1d) across all cores by instance for 336h0m0s_
 
@@ -3624,7 +3559,7 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 <br />
 ## syntect-server: provisioning_container_memory_usage_long_term
 
-<p class="subtitle">code-intel: container memory usage (1d maximum) by instance</p>**Descriptions:**
+<p class="subtitle">cloud: container memory usage (1d maximum) by instance</p>**Descriptions:**
 
 - _syntect-server: 80%+ or less than 10% container memory usage (1d maximum) by instance for 336h0m0s_
 
@@ -3645,7 +3580,7 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 <br />
 ## syntect-server: provisioning_container_cpu_usage_short_term
 
-<p class="subtitle">code-intel: container cpu usage total (5m maximum) across all cores by instance</p>**Descriptions:**
+<p class="subtitle">cloud: container cpu usage total (5m maximum) across all cores by instance</p>**Descriptions:**
 
 - _syntect-server: 90%+ container cpu usage total (5m maximum) across all cores by instance for 30m0s_
 
@@ -3664,7 +3599,7 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 <br />
 ## syntect-server: provisioning_container_memory_usage_short_term
 
-<p class="subtitle">code-intel: container memory usage (5m maximum) by instance</p>**Descriptions:**
+<p class="subtitle">cloud: container memory usage (5m maximum) by instance</p>**Descriptions:**
 
 - _syntect-server: 90%+ container memory usage (5m maximum) by instance_
 
@@ -3683,7 +3618,7 @@ To learn more about Sourcegraph's alerting, see [our alerting documentation](htt
 <br />
 ## syntect-server: pods_available_percentage
 
-<p class="subtitle">code-intel: percentage pods available</p>**Descriptions:**
+<p class="subtitle">cloud: percentage pods available</p>**Descriptions:**
 
 - _syntect-server: less than 90% percentage pods available for 10m0s_
 

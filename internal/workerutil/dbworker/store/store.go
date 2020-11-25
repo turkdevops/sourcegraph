@@ -13,7 +13,7 @@ import (
 )
 
 // Store is the persistence layer for the dbworker package that handles worker-side operations backed by a Postgres
-// database. See StoreOptions for details on the required shape of the database tables (e.g. table column names/types).
+// database. See Options for details on the required shape of the database tables (e.g. table column names/types).
 type Store interface {
 	basestore.ShareableStore
 
@@ -56,6 +56,11 @@ type Store interface {
 	// with an error will not be updated. This method returns a boolean flag indicating if the record was updated.
 	MarkErrored(ctx context.Context, id int, failureMessage string) (bool, error)
 
+	// MarkFailed attempts to update the state of the record to failed. This method will only have an effect
+	// if the current state of the record is processing or completed. A requeued record or a record already marked
+	// with an error will not be updated. This method returns a boolean flag indicating if the record was updated.
+	MarkFailed(ctx context.Context, id int, failureMessage string) (bool, error)
+
 	// ResetStalled moves all unlocked records in the processing state for more than `StalledMaxAge` back to the queued
 	// state. In order to prevent input that continually crashes worker instances, records that have been reset more
 	// than `MaxNumResets` times will be marked as errored. This method returns a list of record identifiers that have
@@ -65,21 +70,21 @@ type Store interface {
 
 type store struct {
 	*basestore.Store
-	options        StoreOptions
+	options        Options
 	columnReplacer *strings.Replacer
 }
 
 var _ Store = &store{}
 
-// StoreOptions configure the behavior of Store over a particular set of tables, columns, and expressions.
-type StoreOptions struct {
+// Options configure the behavior of Store over a particular set of tables, columns, and expressions.
+type Options struct {
 	// TableName is the name of the table containing work records.
 	//
 	// The target table (and the target view referenced by `ViewName`) must have the following columns
 	// and types:
 	//
 	//   - id: integer primary key
-	//   - state: an enum type containing at least `queued`, `processing`, and `errored`
+	//   - state: an enum type containing at least `queued`, `processing`, `errored`, and `failed`
 	//   - failure_message: text
 	//   - started_at: timestamp with time zone
 	//   - finished_at: timestamp with time zone
@@ -162,13 +167,13 @@ type StoreOptions struct {
 // See the `CloseRows` function in the store/base package for suggested implementation details.
 type RecordScanFn func(rows *sql.Rows, err error) (workerutil.Record, bool, error)
 
-// NewStore creates a new store with the given database handle and options.
-func NewStore(handle *basestore.TransactableHandle, options StoreOptions) Store {
+// New creates a new store with the given database handle and options.
+func New(handle *basestore.TransactableHandle, options Options) Store {
 	return newStore(handle, options)
 }
 
 // newStore creates a new store with the given database handle and options.
-func newStore(handle *basestore.TransactableHandle, options StoreOptions) *store {
+func newStore(handle *basestore.TransactableHandle, options Options) *store {
 	if options.ViewName == "" {
 		options.ViewName = options.TableName
 	}
@@ -451,17 +456,27 @@ RETURNING {id}
 // if the current state of the record is processing or completed. A requeued record or a record already marked
 // with an error will not be updated. This method returns a boolean flag indicating if the record was updated.
 func (s *store) MarkErrored(ctx context.Context, id int, failureMessage string) (bool, error) {
-	_, ok, err := basestore.ScanFirstInt(s.Query(ctx, s.formatQuery(markErroredQuery, quote(s.options.TableName), failureMessage, id)))
+	q := s.formatQuery(markErroredOrFailedQuery, quote(s.options.TableName), "errored", failureMessage, id)
+	_, ok, err := basestore.ScanFirstInt(s.Query(ctx, q))
 	return ok, err
 }
 
-const markErroredQuery = `
--- source: internal/workerutil/store.go:MarkErrored
+const markErroredOrFailedQuery = `
+-- source: internal/workerutil/store.go:MarkErrored|MarkFailed
 UPDATE %s
-SET {state} = 'errored', {finished_at} = clock_timestamp(), {failure_message} = %s, {num_failures} = {num_failures} + 1
+SET {state} = %s, {finished_at} = clock_timestamp(), {failure_message} = %s, {num_failures} = {num_failures} + 1
 WHERE {id} = %s AND ({state} = 'processing' OR {state} = 'completed')
 RETURNING {id}
 `
+
+// MarkFailed attempts to update the state of the record to failed. This method will only have an effect
+// if the current state of the record is processing or completed. A requeued record or a record already marked
+// with an error will not be updated. This method returns a boolean flag indicating if the record was updated.
+func (s *store) MarkFailed(ctx context.Context, id int, failureMessage string) (bool, error) {
+	q := s.formatQuery(markErroredOrFailedQuery, quote(s.options.TableName), "failed", failureMessage, id)
+	_, ok, err := basestore.ScanFirstInt(s.Query(ctx, q))
+	return ok, err
+}
 
 // ResetStalled moves all unlocked records in the processing state for more than `StalledMaxAge` back to the queued
 // state. In order to prevent input that continually crashes worker instances, records that have been reset more

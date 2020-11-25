@@ -12,6 +12,7 @@ import {
 import { afterEachSaveScreenshotIfFailed } from '../../../shared/src/testing/screenshotReporter'
 import * as path from 'path'
 import { DiffHunkLineType } from '../graphql-operations'
+import { encodeURIComponentExceptSlashes } from '../../../shared/src/util/url'
 
 describe('Repository', () => {
     let driver: Driver
@@ -384,13 +385,7 @@ describe('Repository', () => {
             const breadcrumbTexts = await driver.page.evaluate(() =>
                 [...document.querySelectorAll('.test-breadcrumb')].map(breadcrumb => breadcrumb.textContent)
             )
-            assert.deepStrictEqual(breadcrumbTexts, [
-                'Home',
-                'Repositories',
-                shortRepositoryName,
-                '@master',
-                clickedFileName,
-            ])
+            assert.deepStrictEqual(breadcrumbTexts, [shortRepositoryName, '@master', clickedFileName])
 
             // Return to repo page
             await driver.page.waitForSelector('a.repo-header__repo')
@@ -416,7 +411,9 @@ describe('Repository', () => {
                 ResolveRev: ({ repoName }) => createResolveRevisionResult(repoName),
                 FileExternalLinks: ({ filePath, repoName, revision }) =>
                     createFileExternalLinksResult(
-                        `https://${repoName}/blob/${revision}/${filePath.split('/').map(encodeURIComponent).join('/')}`
+                        `https://${encodeURIComponentExceptSlashes(repoName)}/blob/${encodeURIComponentExceptSlashes(
+                            revision
+                        )}/${encodeURIComponentExceptSlashes(filePath)}`
                     ),
                 TreeEntries: () => ({
                     repository: {
@@ -465,7 +462,7 @@ describe('Repository', () => {
             const breadcrumbTexts = await driver.page.evaluate(() =>
                 [...document.querySelectorAll('.test-breadcrumb')].map(breadcrumb => breadcrumb.textContent)
             )
-            assert.deepStrictEqual(breadcrumbTexts, ['Home', 'Repositories', shortRepositoryName, '@master', filePath])
+            assert.deepStrictEqual(breadcrumbTexts, [shortRepositoryName, '@master', filePath])
 
             await driver.page.waitForSelector('#monaco-query-input .view-lines')
             // TODO: find a more reliable way to get the current search query,
@@ -526,13 +523,7 @@ describe('Repository', () => {
             const breadcrumbTexts = await driver.page.evaluate(() =>
                 [...document.querySelectorAll('.test-breadcrumb')].map(breadcrumb => breadcrumb.textContent)
             )
-            assert.deepStrictEqual(breadcrumbTexts, [
-                'Home',
-                'Repositories',
-                shortRepositoryName,
-                '@master',
-                'readme.md',
-            ])
+            assert.deepStrictEqual(breadcrumbTexts, [shortRepositoryName, '@master', 'readme.md'])
         })
     })
 })

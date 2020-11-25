@@ -12,9 +12,8 @@ import (
 
 	"github.com/keegancsmith/sqlf"
 	"github.com/pkg/errors"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/types"
+
 	"github.com/sourcegraph/sourcegraph/internal/api"
-	"github.com/sourcegraph/sourcegraph/internal/authz"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/db/basestore"
 	"github.com/sourcegraph/sourcegraph/internal/db/dbconn"
@@ -27,8 +26,8 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/github"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/gitlab"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/gitolite"
-	"github.com/sourcegraph/sourcegraph/internal/secret"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
+	"github.com/sourcegraph/sourcegraph/internal/types"
 )
 
 type RepoNotFoundErr struct {
@@ -94,7 +93,7 @@ func (s *RepoStore) Get(ctx context.Context, id api.RepoID) (*types.Repo, error)
 	}
 	s.ensureStore()
 
-	repos, err := s.getBySQL(ctx, sqlf.Sprintf("id=%d LIMIT 1", id))
+	repos, err := s.getBySQL(ctx, sqlf.Sprintf("id=%d", id), sqlf.Sprintf("LIMIT 1"))
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +117,7 @@ func (s *RepoStore) GetByName(ctx context.Context, nameOrURI api.RepoName) (*typ
 	}
 	s.ensureStore()
 
-	repos, err := s.getBySQL(ctx, sqlf.Sprintf("name=%s LIMIT 1", nameOrURI))
+	repos, err := s.getBySQL(ctx, sqlf.Sprintf("name=%s", nameOrURI), sqlf.Sprintf("LIMIT 1"))
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +129,7 @@ func (s *RepoStore) GetByName(ctx context.Context, nameOrURI api.RepoName) (*typ
 	// We don't fetch in the same SQL query since uri is not unique and could
 	// conflict with a name. We prefer returning the matching name if it
 	// exists.
-	repos, err = s.getBySQL(ctx, sqlf.Sprintf("uri=%s LIMIT 1", nameOrURI))
+	repos, err = s.getBySQL(ctx, sqlf.Sprintf("uri=%s", nameOrURI), sqlf.Sprintf("LIMIT 1"))
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +158,7 @@ func (s *RepoStore) GetByIDs(ctx context.Context, ids ...api.RepoID) ([]*types.R
 		items[i] = sqlf.Sprintf("%d", ids[i])
 	}
 	q := sqlf.Sprintf("id IN (%s)", sqlf.Join(items, ","))
-	return s.getReposBySQL(ctx, true, nil, q)
+	return s.getReposBySQL(ctx, true, nil, q, nil)
 }
 
 // GetReposSetByIDs returns a map of repositories with the given IDs, indexed by their IDs. The number of results
@@ -217,8 +216,11 @@ func (s *RepoStore) Count(ctx context.Context, opt ReposListOptions) (ct int, er
 const getRepoByQueryFmtstr = `
 SELECT %s
 FROM %%s
-WHERE deleted_at IS NULL
-AND %%s
+WHERE
+	deleted_at IS NULL
+AND %%s   -- Populates "queryConds"
+AND (%%s) -- Populates "authzConds"
+%%s       -- Populates "querySuffix"
 `
 
 const getSourcesByRepoQueryStr = `
@@ -263,13 +265,24 @@ func minimalColumns(columns []string) []string {
 	return columns[:6]
 }
 
-func (s *RepoStore) getBySQL(ctx context.Context, querySuffix *sqlf.Query) ([]*types.Repo, error) {
-	return s.getReposBySQL(ctx, false, nil, querySuffix)
+func (s *RepoStore) getBySQL(ctx context.Context, queryConds, querySuffix *sqlf.Query) ([]*types.Repo, error) {
+	return s.getReposBySQL(ctx, false, nil, queryConds, querySuffix)
 }
 
-func (s *RepoStore) getReposBySQL(ctx context.Context, minimal bool, fromClause, querySuffix *sqlf.Query) ([]*types.Repo, error) {
+func (s *RepoStore) getReposBySQL(ctx context.Context, minimal bool, fromClause, queryConds, querySuffix *sqlf.Query) ([]*types.Repo, error) {
 	if fromClause == nil {
 		fromClause = sqlf.Sprintf("repo")
+	}
+	if queryConds == nil {
+		queryConds = sqlf.Sprintf("TRUE")
+	}
+	if querySuffix == nil {
+		querySuffix = sqlf.Sprintf("")
+	}
+
+	authzConds, err := authzQueryConds(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	columns := getBySQLColumns
@@ -280,6 +293,8 @@ func (s *RepoStore) getReposBySQL(ctx context.Context, minimal bool, fromClause,
 	q := sqlf.Sprintf(
 		fmt.Sprintf(getRepoByQueryFmtstr, strings.Join(columns, ",")),
 		fromClause,
+		queryConds,
+		authzConds, // 🚨 SECURITY: Enforce repository permissions
 		querySuffix,
 	)
 
@@ -306,8 +321,7 @@ func (s *RepoStore) getReposBySQL(ctx context.Context, minimal bool, fromClause,
 		return nil, err
 	}
 
-	// 🚨 SECURITY: This enforces repository permissions
-	return authzFilter(ctx, repos, authz.Read)
+	return repos, nil
 }
 
 func scanRepo(rows *sql.Rows, r *types.Repo) (err error) {
@@ -349,7 +363,7 @@ func scanRepo(rows *sql.Rows, r *types.Repo) (err error) {
 
 	type sourceInfo struct {
 		ID       int64
-		CloneURL secret.StringValue
+		CloneURL string
 		Kind     string
 	}
 	r.Sources = make(map[string]*types.SourceInfo)
@@ -363,7 +377,7 @@ func scanRepo(rows *sql.Rows, r *types.Repo) (err error) {
 			urn := extsvc.URN(src.Kind, src.ID)
 			r.Sources[urn] = &types.SourceInfo{
 				ID:       urn,
-				CloneURL: *src.CloneURL.S,
+				CloneURL: src.CloneURL,
 			}
 		}
 	}
@@ -546,20 +560,20 @@ func (s *RepoStore) List(ctx context.Context, opt ReposListOptions) (results []*
 		fromClause = sqlf.Sprintf("repo JOIN external_service_repos e ON (repo.id = e.repo_id AND e.external_service_id = %s)", opt.ExternalServiceID)
 	}
 
-	// fetch matching repos
-	predQ := sqlf.Sprintf("TRUE")
+	queryConds := sqlf.Sprintf("TRUE")
 	if len(conds) > 0 {
 		if opt.UseOr {
-			predQ = sqlf.Join(conds, "\n OR ")
+			queryConds = sqlf.Join(conds, "\n OR ")
 		} else {
-			predQ = sqlf.Join(conds, "\n AND ")
+			queryConds = sqlf.Join(conds, "\n AND ")
 		}
 	}
+	queryConds = sqlf.Sprintf("(%s)", queryConds)
 
-	fetchSQL := sqlf.Sprintf("%s %s %s", sqlf.Sprintf("(%s)", predQ), opt.OrderBy.SQL(), opt.LimitOffset.SQL())
-	tr.LogFields(trace.SQL(fetchSQL))
+	querySuffix := sqlf.Sprintf("%s %s", opt.OrderBy.SQL(), opt.LimitOffset.SQL())
+	tr.LogFields(trace.SQL(queryConds), trace.SQL(querySuffix))
 
-	return s.getReposBySQL(ctx, opt.OnlyRepoIDs, fromClause, fetchSQL)
+	return s.getReposBySQL(ctx, opt.OnlyRepoIDs, fromClause, queryConds, querySuffix)
 }
 
 // Create inserts repos and their sources, respectively in the repo and external_service_repos table.
@@ -698,7 +712,7 @@ func sourcesColumn(repoID api.RepoID, sources map[string]*types.SourceInfo) (jso
 		records = append(records, externalServiceRepo{
 			ExternalServiceID: src.ExternalServiceID(),
 			RepoID:            int64(repoID),
-			CloneURL:          secret.StringValue{S: &src.CloneURL},
+			CloneURL:          src.CloneURL,
 		})
 	}
 
@@ -706,9 +720,9 @@ func sourcesColumn(repoID api.RepoID, sources map[string]*types.SourceInfo) (jso
 }
 
 type externalServiceRepo struct {
-	ExternalServiceID int64              `json:"external_service_id"`
-	RepoID            int64              `json:"repo_id"`
-	CloneURL          secret.StringValue `json:"clone_url"`
+	ExternalServiceID int64  `json:"external_service_id"`
+	RepoID            int64  `json:"repo_id"`
+	CloneURL          string `json:"clone_url"`
 }
 
 var insertReposQuery = `
@@ -805,6 +819,10 @@ insert_sources AS (
     repo_id,
     clone_url
   FROM sources_list
+  ON CONFLICT ON CONSTRAINT external_service_repos_repo_id_external_service_id_unique
+  DO
+    UPDATE SET clone_url = EXCLUDED.clone_url
+    WHERE external_service_repos.clone_url != EXCLUDED.clone_url
 )
 SELECT id FROM inserted_repos_with_ids;
 `
@@ -995,52 +1013,52 @@ func (*RepoStore) listSQL(opt ReposListOptions) (conds []*sqlf.Query, err error)
 	return conds, nil
 }
 
-// GetUserAddedRepoNames will fetch all repos added by the given user
+// GetUserAddedRepoNames returns name of all repositories added by the given user.
 func (s *RepoStore) GetUserAddedRepoNames(ctx context.Context, userID int32) ([]api.RepoName, error) {
 	s.ensureStore()
 
-	columns := minimalColumns(getBySQLColumns)
-	fmtString := fmt.Sprintf(`
-SELECT %s from repo
+	authzConds, err := authzQueryConds(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	const fmtString = `
+SELECT DISTINCT(repo.name) FROM repo
 JOIN external_service_repos esr ON repo.id = esr.repo_id
-WHERE esr.external_service_id IN (
-    SELECT id from external_services
-    WHERE namespace_user_id = %%s
-    AND deleted_at IS NULL
-)
+WHERE
+	esr.external_service_id IN (
+		SELECT id from external_services
+		WHERE namespace_user_id = %s
+		AND deleted_at IS NULL
+	)
+AND (%s) -- Populates "authzConds"
 AND repo.deleted_at IS NULL
-`, strings.Join(columns, ","))
-	q := sqlf.Sprintf(fmtString, userID)
+`
+	q := sqlf.Sprintf(
+		fmtString,
+		userID,
+		authzConds, // 🚨 SECURITY: Enforce repository permissions
+	)
 
 	rows, err := s.Query(ctx, q)
-
 	if err != nil {
 		return nil, errors.Wrap(err, "getting user repos")
 	}
 	defer rows.Close()
 
-	var repos []*types.Repo
+	var repoNames []api.RepoName
 	for rows.Next() {
-		var repo types.Repo
-		if err := scanRepo(rows, &repo); err != nil {
+		var name api.RepoName
+		if err := rows.Scan(&name); err != nil {
 			return nil, err
 		}
-		repos = append(repos, &repo)
+		repoNames = append(repoNames, name)
 	}
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 
-	// 🚨 SECURITY: This enforces repository permissions
-	repos, err = authzFilter(ctx, repos, authz.Read)
-	if err != nil {
-		return nil, errors.Wrap(err, "performing authz filter")
-	}
-	names := make([]api.RepoName, 0, len(repos))
-	for _, r := range repos {
-		names = append(names, r.Name)
-	}
-	return names, nil
+	return repoNames, nil
 }
 
 // parseCursorConds checks whether the query is using cursor-based pagination, and

@@ -15,7 +15,7 @@ func Frontend() *Container {
 						{
 							Name:            "99th_percentile_search_request_duration",
 							Description:     "99th percentile successful search request duration over 5m",
-							Query:           `histogram_quantile(0.99, sum by (le)(rate(src_graphql_field_seconds_bucket{type="Search",field="results",error="false",source="browser",name!="CodeIntelSearch"}[5m])))`,
+							Query:           `histogram_quantile(0.99, sum by (le)(rate(src_graphql_field_seconds_bucket{type="Search",field="results",error="false",source="browser",request_name!="CodeIntelSearch"}[5m])))`,
 							DataMayNotExist: true,
 
 							Warning:      Alert().GreaterOrEqual(20),
@@ -31,7 +31,7 @@ func Frontend() *Container {
 						{
 							Name:            "90th_percentile_search_request_duration",
 							Description:     "90th percentile successful search request duration over 5m",
-							Query:           `histogram_quantile(0.90, sum by (le)(rate(src_graphql_field_seconds_bucket{type="Search",field="results",error="false",source="browser",name!="CodeIntelSearch"}[5m])))`,
+							Query:           `histogram_quantile(0.90, sum by (le)(rate(src_graphql_field_seconds_bucket{type="Search",field="results",error="false",source="browser",request_name!="CodeIntelSearch"}[5m])))`,
 							DataMayNotExist: true,
 
 							Warning:      Alert().GreaterOrEqual(15),
@@ -49,7 +49,7 @@ func Frontend() *Container {
 						{
 							Name:            "hard_timeout_search_responses",
 							Description:     "hard timeout search responses every 5m",
-							Query:           `(sum(increase(src_graphql_search_response{status="timeout",source="browser",name!="CodeIntelSearch"}[5m])) + sum(increase(src_graphql_search_response{status="alert",alert_type="timed_out",source="browser",name!="CodeIntelSearch"}[5m]))) / sum(increase(src_graphql_search_response{source="browser",name!="CodeIntelSearch"}[5m])) * 100`,
+							Query:           `(sum(increase(src_graphql_search_response{status="timeout",source="browser",request_name!="CodeIntelSearch"}[5m])) + sum(increase(src_graphql_search_response{status="alert",alert_type="timed_out",source="browser",request_name!="CodeIntelSearch"}[5m]))) / sum(increase(src_graphql_search_response{source="browser",request_name!="CodeIntelSearch"}[5m])) * 100`,
 							DataMayNotExist: true,
 
 							Warning:           Alert().GreaterOrEqual(2).For(15 * time.Minute),
@@ -61,7 +61,7 @@ func Frontend() *Container {
 						{
 							Name:            "hard_error_search_responses",
 							Description:     "hard error search responses every 5m",
-							Query:           `sum by (status)(increase(src_graphql_search_response{status=~"error",source="browser",name!="CodeIntelSearch"}[5m])) / ignoring(status) group_left sum(increase(src_graphql_search_response{source="browser",name!="CodeIntelSearch"}[5m])) * 100`,
+							Query:           `sum by (status)(increase(src_graphql_search_response{status=~"error",source="browser",request_name!="CodeIntelSearch"}[5m])) / ignoring(status) group_left sum(increase(src_graphql_search_response{source="browser",request_name!="CodeIntelSearch"}[5m])) * 100`,
 							DataMayNotExist: true,
 
 							Warning:           Alert().GreaterOrEqual(2).For(15 * time.Minute),
@@ -73,7 +73,7 @@ func Frontend() *Container {
 						{
 							Name:            "partial_timeout_search_responses",
 							Description:     "partial timeout search responses every 5m",
-							Query:           `sum by (status)(increase(src_graphql_search_response{status="partial_timeout",source="browser",name!="CodeIntelSearch"}[5m])) / ignoring(status) group_left sum(increase(src_graphql_search_response{source="browser",name!="CodeIntelSearch"}[5m])) * 100`,
+							Query:           `sum by (status)(increase(src_graphql_search_response{status="partial_timeout",source="browser",request_name!="CodeIntelSearch"}[5m])) / ignoring(status) group_left sum(increase(src_graphql_search_response{source="browser",request_name!="CodeIntelSearch"}[5m])) * 100`,
 							DataMayNotExist: true,
 
 							Warning:           Alert().GreaterOrEqual(5).For(15 * time.Minute),
@@ -84,7 +84,7 @@ func Frontend() *Container {
 						{
 							Name:            "search_alert_user_suggestions",
 							Description:     "search alert user suggestions shown every 5m",
-							Query:           `sum by (alert_type)(increase(src_graphql_search_response{status="alert",alert_type!~"timed_out|no_results__suggest_quotes",source="browser",name!="CodeIntelSearch"}[5m])) / ignoring(alert_type) group_left sum(increase(src_graphql_search_response{source="browser",name!="CodeIntelSearch"}[5m])) * 100`,
+							Query:           `sum by (alert_type)(increase(src_graphql_search_response{status="alert",alert_type!~"timed_out|no_results__suggest_quotes",source="browser",request_name!="CodeIntelSearch"}[5m])) / ignoring(alert_type) group_left sum(increase(src_graphql_search_response{source="browser",request_name!="CodeIntelSearch"}[5m])) * 100`,
 							DataMayNotExist: true,
 
 							Warning:      Alert().GreaterOrEqual(5).For(15 * time.Minute),
@@ -314,9 +314,31 @@ func Frontend() *Container {
 				Rows: []Row{
 					{
 						{
+							Name:              "codeintel_resolvers_99th_percentile_duration",
+							Description:       "99th percentile successful resolvers operation duration over 5m",
+							Query:             `histogram_quantile(0.99, sum by (le)(rate(src_codeintel_resolvers_duration_seconds_bucket{job="sourcegraph-frontend"}[5m])))`,
+							DataMayNotExist:   true,
+							Warning:           Alert().GreaterOrEqual(20),
+							PanelOptions:      PanelOptions().LegendFormat("resolvers operation").Unit(Seconds),
+							Owner:             ObservableOwnerCodeIntel,
+							PossibleSolutions: "none",
+						},
+						{
+							Name:              "codeintel_resolvers_errors",
+							Description:       "resolvers errors every 5m",
+							Query:             `sum(increase(src_codeintel_resolvers_errors_total{job="sourcegraph-frontend"}[5m]))`,
+							DataMayNotExist:   true,
+							Warning:           Alert().GreaterOrEqual(20),
+							PanelOptions:      PanelOptions().LegendFormat("error"),
+							Owner:             ObservableOwnerCodeIntel,
+							PossibleSolutions: "none",
+						},
+					},
+					{
+						{
 							Name:              "codeintel_api_99th_percentile_duration",
 							Description:       "99th percentile successful api operation duration over 5m",
-							Query:             `histogram_quantile(0.99, sum by (le)(rate(src_codeintel_api_duration_seconds_bucket{job="frontend"}[5m])))`,
+							Query:             `histogram_quantile(0.99, sum by (le)(rate(src_codeintel_api_duration_seconds_bucket{job="sourcegraph-frontend"}[5m])))`,
 							DataMayNotExist:   true,
 							Warning:           Alert().GreaterOrEqual(20),
 							PanelOptions:      PanelOptions().LegendFormat("api operation").Unit(Seconds),
@@ -326,7 +348,7 @@ func Frontend() *Container {
 						{
 							Name:              "codeintel_api_errors",
 							Description:       "api errors every 5m",
-							Query:             `increase(src_codeintel_api_errors_total{job="frontend"}[5m])`,
+							Query:             `sum(increase(src_codeintel_api_errors_total{job="sourcegraph-frontend"}[5m]))`,
 							DataMayNotExist:   true,
 							Warning:           Alert().GreaterOrEqual(20),
 							PanelOptions:      PanelOptions().LegendFormat("error"),
@@ -338,7 +360,7 @@ func Frontend() *Container {
 						{
 							Name:              "codeintel_dbstore_99th_percentile_duration",
 							Description:       "99th percentile successful dbstore operation duration over 5m",
-							Query:             `histogram_quantile(0.99, sum by (le)(rate(src_codeintel_dbstore_duration_seconds_bucket{job="frontend"}[5m])))`,
+							Query:             `histogram_quantile(0.99, sum by (le)(rate(src_codeintel_dbstore_duration_seconds_bucket{job="sourcegraph-frontend"}[5m])))`,
 							DataMayNotExist:   true,
 							Warning:           Alert().GreaterOrEqual(20),
 							PanelOptions:      PanelOptions().LegendFormat("store operation").Unit(Seconds),
@@ -348,7 +370,7 @@ func Frontend() *Container {
 						{
 							Name:              "codeintel_dbstore_errors",
 							Description:       "dbstore errors every 5m",
-							Query:             `increase(src_codeintel_dbstore_errors_total{job="frontend"}[5m])`,
+							Query:             `sum(increase(src_codeintel_dbstore_errors_total{job="sourcegraph-frontend"}[5m]))`,
 							DataMayNotExist:   true,
 							Warning:           Alert().GreaterOrEqual(20),
 							PanelOptions:      PanelOptions().LegendFormat("error"),
@@ -360,7 +382,7 @@ func Frontend() *Container {
 						{
 							Name:              "codeintel_lsifstore_99th_percentile_duration",
 							Description:       "99th percentile successful lsifstore operation duration over 5m",
-							Query:             `histogram_quantile(0.99, sum by (le)(rate(src_codeintel_lsifstore_duration_seconds_bucket{job="frontend"}[5m])))`,
+							Query:             `histogram_quantile(0.99, sum by (le)(rate(src_codeintel_lsifstore_duration_seconds_bucket{job="sourcegraph-frontend"}[5m])))`,
 							DataMayNotExist:   true,
 							Warning:           Alert().GreaterOrEqual(20),
 							PanelOptions:      PanelOptions().LegendFormat("store operation").Unit(Seconds),
@@ -370,7 +392,7 @@ func Frontend() *Container {
 						{
 							Name:              "codeintel_lsifstore_errors",
 							Description:       "lsifstore errors every 5m",
-							Query:             `increase(src_codeintel_lsifstore_errors_total{job="frontend"}[5m])`,
+							Query:             `sum(increase(src_codeintel_lsifstore_errors_total{job="sourcegraph-frontend"}[5m]))`,
 							DataMayNotExist:   true,
 							Warning:           Alert().GreaterOrEqual(20),
 							PanelOptions:      PanelOptions().LegendFormat("error"),
@@ -382,7 +404,7 @@ func Frontend() *Container {
 						{
 							Name:              "codeintel_uploadstore_99th_percentile_duration",
 							Description:       "99th percentile successful uploadstore operation duration over 5m",
-							Query:             `histogram_quantile(0.99, sum by (le)(rate(src_codeintel_uploadstore_duration_seconds_bucket{job="frontend"}[5m])))`,
+							Query:             `histogram_quantile(0.99, sum by (le)(rate(src_codeintel_uploadstore_duration_seconds_bucket{job="sourcegraph-frontend"}[5m])))`,
 							DataMayNotExist:   true,
 							Warning:           Alert().GreaterOrEqual(20),
 							PanelOptions:      PanelOptions().LegendFormat("store operation").Unit(Seconds),
@@ -392,7 +414,7 @@ func Frontend() *Container {
 						{
 							Name:              "codeintel_uploadstore_errors",
 							Description:       "uploadstore errors every 5m",
-							Query:             `increase(src_codeintel_uploadstore_errors_total{job="frontend"}[5m])`,
+							Query:             `sum(increase(src_codeintel_uploadstore_errors_total{job="sourcegraph-frontend"}[5m]))`,
 							DataMayNotExist:   true,
 							Warning:           Alert().GreaterOrEqual(20),
 							PanelOptions:      PanelOptions().LegendFormat("error"),
@@ -404,7 +426,7 @@ func Frontend() *Container {
 						{
 							Name:              "codeintel_gitserver_99th_percentile_duration",
 							Description:       "99th percentile successful gitserver operation duration over 5m",
-							Query:             `histogram_quantile(0.99, sum by (le)(rate(src_codeintel_gitserver_duration_seconds_bucket{job="frontend"}[5m])))`,
+							Query:             `histogram_quantile(0.99, sum by (le)(rate(src_codeintel_gitserver_duration_seconds_bucket{job="sourcegraph-frontend"}[5m])))`,
 							DataMayNotExist:   true,
 							Warning:           Alert().GreaterOrEqual(20),
 							PanelOptions:      PanelOptions().LegendFormat("store operation").Unit(Seconds),
@@ -414,7 +436,7 @@ func Frontend() *Container {
 						{
 							Name:              "codeintel_gitserver_errors",
 							Description:       "gitserver errors every 5m",
-							Query:             `increase(src_codeintel_gitserver_errors_total{job="frontend"}[5m])`,
+							Query:             `sum(increase(src_codeintel_gitserver_errors_total{job="sourcegraph-frontend"}[5m]))`,
 							DataMayNotExist:   true,
 							Warning:           Alert().GreaterOrEqual(20),
 							PanelOptions:      PanelOptions().LegendFormat("error"),
@@ -468,41 +490,9 @@ func Frontend() *Container {
 					},
 					{
 						{
-							Name:              "99th_percentile_precise_code_intel_bundle_manager_query_duration",
-							Description:       "99th percentile successful precise-code-intel-bundle-manager query duration over 5m",
-							Query:             `histogram_quantile(0.99, sum by (le,category)(rate(src_precise_code_intel_bundle_manager_request_duration_seconds_bucket{job="frontend",category!="transfer"}[5m])))`,
-							DataMayNotExist:   true,
-							Warning:           Alert().GreaterOrEqual(20),
-							PanelOptions:      PanelOptions().LegendFormat("{{category}}").Unit(Seconds),
-							Owner:             ObservableOwnerCodeIntel,
-							PossibleSolutions: "none",
-						},
-						{
-							Name:              "99th_percentile_precise_code_intel_bundle_manager_transfer_duration",
-							Description:       "99th percentile successful precise-code-intel-bundle-manager data transfer duration over 5m",
-							Query:             `histogram_quantile(0.99, sum by (le,category)(rate(src_precise_code_intel_bundle_manager_request_duration_seconds_bucket{job="frontend",category="transfer"}[5m])))`,
-							DataMayNotExist:   true,
-							Warning:           Alert().GreaterOrEqual(300),
-							PanelOptions:      PanelOptions().LegendFormat("{{category}}").Unit(Seconds),
-							Owner:             ObservableOwnerCodeIntel,
-							PossibleSolutions: "none",
-						},
-						{
-							Name:              "precise_code_intel_bundle_manager_error_responses",
-							Description:       "precise-code-intel-bundle-manager error responses every 5m",
-							Query:             `sum by(category) (increase(src_precise_code_intel_bundle_manager_request_duration_seconds_count{job="frontend",code!~"2.."}[5m]))  / ignoring(code) group_left sum by(category) (increase(src_precise_code_intel_bundle_manager_request_duration_seconds_count{job="frontend"}[5m])) * 100`,
-							DataMayNotExist:   true,
-							Warning:           Alert().GreaterOrEqual(5).For(15 * time.Minute),
-							PanelOptions:      PanelOptions().LegendFormat("{{category}}").Unit(Percentage),
-							Owner:             ObservableOwnerCodeIntel,
-							PossibleSolutions: "none",
-						},
-					},
-					{
-						{
 							Name:              "99th_percentile_gitserver_duration",
 							Description:       "99th percentile successful gitserver query duration over 5m",
-							Query:             `histogram_quantile(0.99, sum by (le,category)(rate(src_gitserver_request_duration_seconds_bucket{job="frontend"}[5m])))`,
+							Query:             `histogram_quantile(0.99, sum by (le,category)(rate(src_gitserver_request_duration_seconds_bucket{job="sourcegraph-frontend"}[5m])))`,
 							DataMayNotExist:   true,
 							Warning:           Alert().GreaterOrEqual(20),
 							PanelOptions:      PanelOptions().LegendFormat("{{category}}").Unit(Seconds),
@@ -512,7 +502,7 @@ func Frontend() *Container {
 						{
 							Name:              "gitserver_error_responses",
 							Description:       "gitserver error responses every 5m",
-							Query:             `sum by (category)(increase(src_gitserver_request_duration_seconds_count{job="frontend",code!~"2.."}[5m])) / ignoring(code) group_left sum by (category)(increase(src_gitserver_request_duration_seconds_count{job="frontend"}[5m])) * 100`,
+							Query:             `sum by (category)(increase(src_gitserver_request_duration_seconds_count{job="sourcegraph-frontend",code!~"2.."}[5m])) / ignoring(code) group_left sum by (category)(increase(src_gitserver_request_duration_seconds_count{job="sourcegraph-frontend"}[5m])) * 100`,
 							DataMayNotExist:   true,
 							Warning:           Alert().GreaterOrEqual(5).For(15 * time.Minute),
 							PanelOptions:      PanelOptions().LegendFormat("{{category}}").Unit(Percentage),

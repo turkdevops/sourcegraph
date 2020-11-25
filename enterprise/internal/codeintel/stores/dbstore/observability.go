@@ -1,6 +1,8 @@
 package dbstore
 
 import (
+	"fmt"
+
 	"github.com/sourcegraph/sourcegraph/internal/metrics"
 	"github.com/sourcegraph/sourcegraph/internal/observation"
 )
@@ -38,6 +40,7 @@ type operations struct {
 	lock                                  *observation.Operation
 	markComplete                          *observation.Operation
 	markErrored                           *observation.Operation
+	markFailed                            *observation.Operation
 	markIndexComplete                     *observation.Operation
 	markIndexErrored                      *observation.Operation
 	markQueued                            *observation.Operation
@@ -67,7 +70,7 @@ func makeOperations(observationContext *observation.Context) *operations {
 
 	op := func(name string) *observation.Operation {
 		return observationContext.Operation(observation.Op{
-			Name:         "codeintel.dbstore.%s",
+			Name:         fmt.Sprintf("codeintel.dbstore.%s", name),
 			MetricLabels: []string{name},
 			Metrics:      metrics,
 		})
@@ -106,6 +109,7 @@ func makeOperations(observationContext *observation.Context) *operations {
 		lock:                                  op("Lock"),
 		markComplete:                          op("MarkComplete"),
 		markErrored:                           op("MarkErrored"),
+		markFailed:                            op("MarkFailed"),
 		markIndexComplete:                     op("MarkIndexComplete"),
 		markIndexErrored:                      op("MarkIndexErrored"),
 		markQueued:                            op("MarkQueued"),

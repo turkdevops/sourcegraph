@@ -16,7 +16,9 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sourcegraph/sourcegraph/internal/api"
+	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
+	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/internal/workerutil"
 	dbworkerstore "github.com/sourcegraph/sourcegraph/internal/workerutil/dbworker/store"
 )
@@ -236,8 +238,8 @@ func (s *Syncer) SyncExternalService(ctx context.Context, tx Store, externalServ
 		return errors.Wrap(err, "syncer.sync.sourced")
 	}
 
-	// User added external services should only sync public code
-	if isUserOwned {
+	// Unless explicitly specified with "all", user added external services should only sync public code
+	if isUserOwned && conf.ExternalServiceUserMode() != conf.ExternalServiceModeAll {
 		sourced = sourced.Filter(func(r *Repo) bool { return !r.Private })
 	}
 
@@ -682,7 +684,7 @@ func NewDiff(sourced, stored []*Repo) (diff Diff) {
 	return newDiff(nil, sourced, stored)
 }
 
-func newDiff(svc *ExternalService, sourced, stored []*Repo) (diff Diff) {
+func newDiff(svc *types.ExternalService, sourced, stored []*Repo) (diff Diff) {
 	// Sort sourced so we merge deterministically
 	sort.Sort(Repos(sourced))
 
@@ -753,7 +755,7 @@ func merge(o, n *Repo) {
 	o.Update(n)
 }
 
-func (s *Syncer) sourced(ctx context.Context, svcs []*ExternalService, onSourced ...func(*Repo) error) ([]*Repo, error) {
+func (s *Syncer) sourced(ctx context.Context, svcs []*types.ExternalService, onSourced ...func(*Repo) error) ([]*Repo, error) {
 	srcs, err := s.Sourcer(svcs...)
 	if err != nil {
 		return nil, err

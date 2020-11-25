@@ -8,12 +8,14 @@ import (
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 	"github.com/sourcegraph/go-diff/diff"
+
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/bitbucketserver"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/github"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/gitlab"
 	gitlabwebhooks "github.com/sourcegraph/sourcegraph/internal/extsvc/gitlab/webhooks"
+	"github.com/sourcegraph/sourcegraph/internal/timeutil"
 	"github.com/sourcegraph/sourcegraph/internal/vcs/git"
 )
 
@@ -52,6 +54,7 @@ const (
 	ReconcilerStateQueued     ReconcilerState = "QUEUED"
 	ReconcilerStateProcessing ReconcilerState = "PROCESSING"
 	ReconcilerStateErrored    ReconcilerState = "ERRORED"
+	ReconcilerStateFailed     ReconcilerState = "FAILED"
 	ReconcilerStateCompleted  ReconcilerState = "COMPLETED"
 )
 
@@ -61,6 +64,7 @@ func (s ReconcilerState) Valid() bool {
 	case ReconcilerStateQueued,
 		ReconcilerStateProcessing,
 		ReconcilerStateErrored,
+		ReconcilerStateFailed,
 		ReconcilerStateCompleted:
 		return true
 	default:
@@ -167,6 +171,7 @@ type Changeset struct {
 	CampaignIDs         []int64
 	ExternalID          string
 	ExternalServiceType string
+	// ExternalBranch should always be prefixed with refs/heads/. Call git.EnsureRefPrefix before setting this value.
 	ExternalBranch      string
 	ExternalDeletedAt   time.Time
 	ExternalUpdatedAt   time.Time
@@ -268,19 +273,19 @@ func (c *Changeset) SetMetadata(meta interface{}) error {
 		c.Metadata = pr
 		c.ExternalID = strconv.FormatInt(pr.Number, 10)
 		c.ExternalServiceType = extsvc.TypeGitHub
-		c.ExternalBranch = pr.HeadRefName
+		c.ExternalBranch = git.EnsureRefPrefix(pr.HeadRefName)
 		c.ExternalUpdatedAt = pr.UpdatedAt
 	case *bitbucketserver.PullRequest:
 		c.Metadata = pr
 		c.ExternalID = strconv.FormatInt(int64(pr.ID), 10)
 		c.ExternalServiceType = extsvc.TypeBitbucketServer
-		c.ExternalBranch = git.AbbreviateRef(pr.FromRef.ID)
+		c.ExternalBranch = git.EnsureRefPrefix(pr.FromRef.ID)
 		c.ExternalUpdatedAt = unixMilliToTime(int64(pr.UpdatedDate))
 	case *gitlab.MergeRequest:
 		c.Metadata = pr
 		c.ExternalID = strconv.FormatInt(int64(pr.IID), 10)
 		c.ExternalServiceType = extsvc.TypeGitLab
-		c.ExternalBranch = pr.SourceBranch
+		c.ExternalBranch = git.EnsureRefPrefix(pr.SourceBranch)
 		c.ExternalUpdatedAt = pr.UpdatedAt.Time
 	default:
 		return errors.New("unknown changeset type")
@@ -345,7 +350,7 @@ func (c *Changeset) Body() (string, error) {
 // SetDeleted sets the internal state of a Changeset so that its State is
 // ChangesetStateDeleted.
 func (c *Changeset) SetDeleted() {
-	c.ExternalDeletedAt = time.Now().UTC().Truncate(time.Microsecond)
+	c.ExternalDeletedAt = timeutil.Now()
 }
 
 // IsDeleted returns true when the Changeset's ExternalDeletedAt is a non-zero

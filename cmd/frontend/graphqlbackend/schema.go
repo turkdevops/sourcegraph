@@ -197,6 +197,12 @@ type Mutation {
     """
     removeUserEmail(user: ID!, email: String!): EmptyResponse!
     """
+    Set an email address as the user's primary.
+
+    Only the user and site admins may perform this mutation.
+    """
+    setUserEmailPrimary(user: ID!, email: String!): EmptyResponse!
+    """
     Manually set the verification status of a user's email, without going through the normal verification process
     (of clicking on a link in the email with a verification code).
 
@@ -744,18 +750,9 @@ type Mutation {
     """
     createCodeMonitor(
         """
-        The namespace represents the owner of the code monitor.
-        Owners can either be users or organizations.
+        A monitor.
         """
-        namespace: ID!
-        """
-        A meaningful description of the code monitor.
-        """
-        description: String!
-        """
-        Whether the code monitor is enabled or not.
-        """
-        enabled: Boolean!
+        monitor: MonitorInput!
         """
         A trigger.
         """
@@ -764,6 +761,50 @@ type Mutation {
         A list of actions.
         """
         actions: [MonitorActionInput!]!
+    ): Monitor!
+    """
+    Set a code monitor to active/inactive.
+    """
+    toggleCodeMonitor(
+        """
+        The id of a code monitor.
+        """
+        id: ID!
+        """
+        Whether the code monitor should be enabled or not.
+        """
+        enabled: Boolean!
+    ): Monitor!
+    """
+    Delete a code monitor.
+    """
+    deleteCodeMonitor(
+        """
+        The id of a code monitor.
+        """
+        id: ID!
+    ): EmptyResponse!
+    """
+    Update a code monitor. We assume that the request contains a complete code monitor,
+    including its trigger and all actions. Actions which are stored in the database,
+    but are missing from the request will be deleted from the database. Actions with id=null
+    will be created.
+    """
+    updateCodeMonitor(
+        """
+        The input required to edit a monitor.
+        """
+        monitor: MonitorEditInput!
+        """
+        The input required to edit the trigger of a monitor. You can only edit triggers that are
+        associated with the monitor (value of field monitor).
+        """
+        trigger: MonitorEditTriggerInput!
+        """
+        The input required to edit the actions of a monitor. You can only edit actions that are
+        associated with the monitor (value of field monitor).
+        """
+        actions: [MonitorEditActionInput!]!
     ): Monitor!
 }
 
@@ -1185,6 +1226,24 @@ type CampaignSpec implements Node {
     campaign doesn't yet exist.
     """
     appliesToCampaign: Campaign
+
+    """
+    The code host connections required for applying this spec. Includes the credentials of the current user.
+    """
+    viewerCampaignsCodeHosts(
+        """
+        Returns the first n code hosts from the list.
+        """
+        first: Int = 50
+        """
+        Opaque pagination cursor.
+        """
+        after: String
+        """
+        Only returns the code hosts for which the viewer doesn't have credentials.
+        """
+        onlyWithoutCredential: Boolean = false
+    ): CampaignsCodeHostConnection!
 }
 
 """
@@ -1435,9 +1494,14 @@ enum ChangesetReconcilerState {
 
     """
     The changeset reconciler ran into a problem while processing the
-    changeset.
+    changeset and will retry it for a number of retries.
     """
     ERRORED
+    """
+    The changeset reconciler ran into a problem while processing the
+    changeset that can't be fixed by retrying.
+    """
+    FAILED
 
     """
     The changeset is not enqueued for processing.
@@ -3156,9 +3220,18 @@ type MonitorEmail implements Node {
     """
     header: String!
     """
-    The recipients of the email.
+    A list of recipients of the email.
     """
-    recipient: MonitorEmailRecipient!
+    recipients(
+        """
+        Returns the first n recipients from the list.
+        """
+        first: Int = 50
+        """
+        Opaque pagination cursor.
+        """
+        after: String
+    ): MonitorActionEmailRecipientsConnection!
     """
     A list of events.
     """
@@ -3183,9 +3256,22 @@ enum MonitorEmailPriority {
 }
 
 """
-Supported types of recipients for email actions.
+A list of events.
 """
-union MonitorEmailRecipient = User
+type MonitorActionEmailRecipientsConnection {
+    """
+    A list of recipients.
+    """
+    nodes: [Namespace!]!
+    """
+    The total number of recipients in the connection.
+    """
+    totalCount: Int!
+    """
+    Pagination information.
+    """
+    pageInfo: PageInfo!
+}
 
 """
 A list of events.
@@ -3237,6 +3323,39 @@ enum EventStatus {
 }
 
 """
+The input required to create a code monitor.
+"""
+input MonitorInput {
+    """
+    The namespace represents the owner of the code monitor.
+    Owners can either be users or organizations.
+    """
+    namespace: ID!
+    """
+    A meaningful description of the code monitor.
+    """
+    description: String!
+    """
+    Whether the code monitor is enabled or not.
+    """
+    enabled: Boolean!
+}
+
+"""
+The input required to edit a code monitor.
+"""
+input MonitorEditInput {
+    """
+    The id of the monitor.
+    """
+    id: ID!
+    """
+    The desired state after the udpate.
+    """
+    update: MonitorInput!
+}
+
+"""
 The input required to create a trigger.
 """
 input MonitorTriggerInput {
@@ -3244,6 +3363,20 @@ input MonitorTriggerInput {
     The query string.
     """
     query: String!
+}
+
+"""
+The input required to edit a trigger.
+"""
+input MonitorEditTriggerInput {
+    """
+    The id of the Trigger.
+    """
+    id: ID!
+    """
+    The desired state after the udpate.
+    """
+    update: MonitorTriggerInput!
 }
 
 """
@@ -3276,6 +3409,29 @@ input MonitorEmailInput {
     Use header to automatically approve the message in a read-only or moderated mailing list.
     """
     header: String!
+}
+"""
+The input required to edit an action.
+"""
+input MonitorEditActionInput {
+    """
+    An email action.
+    """
+    email: MonitorEditEmailInput
+}
+
+"""
+The input required to edit an email action.
+"""
+input MonitorEditEmailInput {
+    """
+    The id of an email action.
+    """
+    id: ID
+    """
+    The desired state after the update.
+    """
+    update: MonitorEmailInput!
 }
 
 """
@@ -7731,9 +7887,59 @@ type LSIFIndex implements Node {
     failure: String
 
     """
+    A series of pre-indexing steps to perform.
+    """
+    dockerSteps: [DockerStep!]!
+
+    """
+    The original root supplied at index schedule time.
+    """
+    inputRoot: String!
+
+    """
+    The name of the target indexer Docker image (e.g., sourcegraph/lsif-go@sha256:...).
+    """
+    indexer: String!
+
+    """
+    The arguments to supply to the indexer container.
+    """
+    indexerArgs: [String!]!
+
+    """
+    The path to the index file relative to the root directory (dump.lsif by default).
+    """
+    outfile: String
+
+    """
+    The output of the configured docker step, indexer, and src-cli invocations.
+    """
+    logContents: String
+
+    """
     The rank of this index in the queue. The value of this field is null if the index has been processed.
     """
     placeInQueue: Int
+}
+
+"""
+A description of a command to run inside of a Docker container.
+"""
+type DockerStep {
+    """
+    The working directory relative to the cloned repository root.
+    """
+    root: String!
+
+    """
+    The name of the Docker image to run.
+    """
+    image: String!
+
+    """
+    The arguments to supply to the Docker container's entrypoint.
+    """
+    commands: [String!]!
 }
 
 """

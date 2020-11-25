@@ -11,7 +11,7 @@ import (
 
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/types"
+
 	"github.com/sourcegraph/sourcegraph/cmd/repo-updater/repos"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/campaigns"
@@ -20,7 +20,7 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/auth"
 	"github.com/sourcegraph/sourcegraph/internal/gitserver/protocol"
-	"github.com/sourcegraph/sourcegraph/internal/vcs/git"
+	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/internal/workerutil"
 	"github.com/sourcegraph/sourcegraph/internal/workerutil/dbworker"
 	dbworkerstore "github.com/sourcegraph/sourcegraph/internal/workerutil/dbworker/store"
@@ -102,19 +102,7 @@ func (r *Reconciler) process(ctx context.Context, tx *Store, ch *campaigns.Chang
 		delta: plan.delta,
 	}
 
-	err = e.ExecutePlan(ctx, plan)
-	if errcode.IsTerminal(err) {
-		// We don't want to retry on terminal error so we don't return an error
-		// from this function and set the NumFailures so high that the changeset is
-		// not dequeued up again.
-		msg := err.Error()
-		e.ch.FailureMessage = &msg
-		e.ch.ReconcilerState = campaigns.ReconcilerStateErrored
-		e.ch.NumFailures = ReconcilerMaxNumRetries + 999
-		return tx.UpdateChangeset(ctx, ch)
-	}
-
-	return err
+	return e.ExecutePlan(ctx, plan)
 }
 
 // ErrPublishSameBranch is returned by publish changeset if a changeset with
@@ -128,7 +116,7 @@ func (e ErrPublishSameBranch) Error() string {
 	return "cannot create changeset on the same branch in multiple campaigns"
 }
 
-func (e ErrPublishSameBranch) Terminal() bool { return true }
+func (e ErrPublishSameBranch) NonRetryable() bool { return true }
 
 type executor struct {
 	gitserverClient   GitserverClient
@@ -138,7 +126,12 @@ type executor struct {
 	tx  *Store
 	ccs repos.ChangesetSource
 
-	repo *repos.Repo
+	repo   *repos.Repo
+	extSvc *types.ExternalService
+
+	// au is nil if we want to use the global credentials stored in the external
+	// service configuration.
+	au auth.Authenticator
 
 	ch    *campaigns.Changeset
 	spec  *campaigns.ChangesetSpec
@@ -158,19 +151,19 @@ func (e *executor) ExecutePlan(ctx context.Context, plan *plan) (err error) {
 		return errors.Wrap(err, "failed to load repository")
 	}
 
-	extSvc, err := loadExternalService(ctx, reposStore, e.repo)
+	e.extSvc, err = loadExternalService(ctx, reposStore, e.repo)
 	if err != nil {
 		return errors.Wrap(err, "failed to load external service")
 	}
 
 	// Figure out which authenticator we should use to modify the changeset.
-	a, err := e.loadAuthenticator(ctx)
+	e.au, err = e.loadAuthenticator(ctx)
 	if err != nil {
 		return err
 	}
 
 	// Set up a source with which we can modify the changeset.
-	e.ccs, err = e.buildChangesetSource(e.repo, extSvc, a)
+	e.ccs, err = e.buildChangesetSource(e.repo, e.extSvc)
 	if err != nil {
 		return err
 	}
@@ -230,7 +223,7 @@ func (e *executor) ExecutePlan(ctx context.Context, plan *plan) (err error) {
 	return e.tx.UpdateChangeset(ctx, e.ch)
 }
 
-func (e *executor) buildChangesetSource(repo *repos.Repo, extSvc *repos.ExternalService, auth auth.Authenticator) (repos.ChangesetSource, error) {
+func (e *executor) buildChangesetSource(repo *repos.Repo, extSvc *types.ExternalService) (repos.ChangesetSource, error) {
 	sources, err := e.sourcer(extSvc)
 	if err != nil {
 		return nil, err
@@ -240,8 +233,8 @@ func (e *executor) buildChangesetSource(repo *repos.Repo, extSvc *repos.External
 	}
 	src := sources[0]
 
-	if auth != nil {
-		// If auth == nil that means the user that applied that last
+	if e.au != nil {
+		// If e.au == nil that means the user that applied that last
 		// campaign/changeset spec is a site-admin and we can fall back to the
 		// global credentials stored in extSvc.
 		ucs, ok := src.(repos.UserSource)
@@ -249,7 +242,7 @@ func (e *executor) buildChangesetSource(repo *repos.Repo, extSvc *repos.External
 			return nil, errors.Errorf("using user credentials on code host of repo %q is not implemented", repo.Name)
 		}
 
-		if src, err = ucs.WithAuthenticator(auth); err != nil {
+		if src, err = ucs.WithAuthenticator(e.au); err != nil {
 			return nil, errors.Wrapf(err, "unable to use this specific user credential on code host of repo %q", repo.Name)
 		}
 	}
@@ -316,14 +309,14 @@ func (e ErrMissingCredentials) Error() string {
 	return fmt.Sprintf("user does not have a valid credential for repository %q", e.repo)
 }
 
-func (e ErrMissingCredentials) Terminal() bool { return true }
+func (e ErrMissingCredentials) NonRetryable() bool { return true }
 
 // pushChangesetPatch creates the commits for the changeset on its codehost.
 func (e *executor) pushChangesetPatch(ctx context.Context) (err error) {
 	existingSameBranch, err := e.tx.GetChangeset(ctx, GetChangesetOpts{
 		ExternalServiceType: e.ch.ExternalServiceType,
 		RepoID:              e.ch.RepoID,
-		ExternalBranch:      git.AbbreviateRef(e.spec.Spec.HeadRef),
+		ExternalBranch:      e.spec.Spec.HeadRef,
 	})
 	if err != nil && err != ErrNoResults {
 		return err
@@ -333,14 +326,8 @@ func (e *executor) pushChangesetPatch(ctx context.Context) (err error) {
 		return ErrPublishSameBranch{}
 	}
 
-	// Figure out which authenticator we should use to push the commits.
-	a, err := e.loadAuthenticator(ctx)
-	if err != nil {
-		return err
-	}
-
 	// Create a commit and push it
-	opts, err := buildCommitOpts(e.repo, e.spec, a)
+	opts, err := buildCommitOpts(e.repo, e.extSvc, e.spec, e.au)
 	if err != nil {
 		return err
 	}
@@ -353,7 +340,7 @@ func (e *executor) publishChangeset(ctx context.Context, asDraft bool) (err erro
 		Title:     e.spec.Spec.Title,
 		Body:      e.spec.Spec.Body,
 		BaseRef:   e.spec.Spec.BaseRef,
-		HeadRef:   git.EnsureRefPrefix(e.spec.Spec.HeadRef),
+		HeadRef:   e.spec.Spec.HeadRef,
 		Repo:      e.repo,
 		Changeset: e.ch,
 	}
@@ -439,7 +426,7 @@ func (e *executor) updateChangeset(ctx context.Context) (err error) {
 		Title:     e.spec.Spec.Title,
 		Body:      e.spec.Spec.Body,
 		BaseRef:   e.spec.Spec.BaseRef,
-		HeadRef:   git.EnsureRefPrefix(e.spec.Spec.HeadRef),
+		HeadRef:   e.spec.Spec.HeadRef,
 		Repo:      e.repo,
 		Changeset: e.ch,
 	}
@@ -493,7 +480,7 @@ func (e *executor) undraftChangeset(ctx context.Context) (err error) {
 		Title:     e.spec.Spec.Title,
 		Body:      e.spec.Spec.Body,
 		BaseRef:   e.spec.Spec.BaseRef,
-		HeadRef:   git.EnsureRefPrefix(e.spec.Spec.HeadRef),
+		HeadRef:   e.spec.Spec.HeadRef,
 		Repo:      e.repo,
 		Changeset: e.ch,
 	}
@@ -529,7 +516,7 @@ func (e *executor) pushCommit(ctx context.Context, opts protocol.CreateCommitFro
 	return nil
 }
 
-func buildCommitOpts(repo *repos.Repo, spec *campaigns.ChangesetSpec, a auth.Authenticator) (protocol.CreateCommitFromPatchRequest, error) {
+func buildCommitOpts(repo *repos.Repo, extSvc *types.ExternalService, spec *campaigns.ChangesetSpec, a auth.Authenticator) (protocol.CreateCommitFromPatchRequest, error) {
 	var opts protocol.CreateCommitFromPatchRequest
 
 	desc := spec.Spec
@@ -554,7 +541,12 @@ func buildCommitOpts(repo *repos.Repo, spec *campaigns.ChangesetSpec, a auth.Aut
 		return opts, err
 	}
 
-	pushConf, err := buildPushConfig(repo.ExternalRepo.ServiceType, a)
+	source, ok := repo.Sources[extSvc.URN()]
+	if !ok {
+		return opts, errors.New("repository was not cloned through given external service")
+	}
+
+	pushConf, err := buildPushConfig(repo.ExternalRepo.ServiceType, source.CloneURL, a)
 	if err != nil {
 		return opts, err
 	}
@@ -589,18 +581,20 @@ func buildCommitOpts(repo *repos.Repo, spec *campaigns.ChangesetSpec, a auth.Aut
 	return opts, nil
 }
 
-func buildPushConfig(extSvcType string, a auth.Authenticator) (*protocol.PushConfig, error) {
-	pc := &protocol.PushConfig{}
+func buildPushConfig(extSvcType, cloneURL string, a auth.Authenticator) (*protocol.PushConfig, error) {
+	u, err := url.Parse(cloneURL)
+	if err != nil {
+		return nil, errors.Wrap(err, "parsing repository clone URL")
+	}
 
 	switch av := a.(type) {
 	case *auth.OAuthBearerToken:
 		switch extSvcType {
 		case extsvc.TypeGitHub:
-			pc.Username = av.Token
+			u.User = url.User(av.Token)
 
 		case extsvc.TypeGitLab:
-			pc.Username = "git"
-			pc.Password = av.Token
+			u.User = url.UserPassword("git", av.Token)
 
 		case extsvc.TypeBitbucketServer:
 			return nil, errors.New("require username/token to push commits to BitbucketServer")
@@ -612,8 +606,7 @@ func buildPushConfig(extSvcType string, a auth.Authenticator) (*protocol.PushCon
 			return nil, errors.New("need token to push commits to " + extSvcType)
 
 		case extsvc.TypeBitbucketServer:
-			pc.Username = av.Username
-			pc.Password = av.Password
+			u.User = url.UserPassword(av.Username, av.Password)
 		}
 
 	case nil:
@@ -624,7 +617,7 @@ func buildPushConfig(extSvcType string, a auth.Authenticator) (*protocol.PushCon
 		return nil, ErrNoPushCredentials{credentialsType: fmt.Sprintf("%T", a)}
 	}
 
-	return pc, nil
+	return &protocol.PushConfig{RemoteURL: u.String()}, nil
 }
 
 // ErrNoPushCredentials is returned by buildCommitOpts if the credentials
@@ -635,7 +628,7 @@ func (e ErrNoPushCredentials) Error() string {
 	return fmt.Sprintf("cannot use credentials of type %T to push commits", e.credentialsType)
 }
 
-func (e ErrNoPushCredentials) Terminal() bool { return true }
+func (e ErrNoPushCredentials) NonRetryable() bool { return true }
 
 // operation is an enum to distinguish between different reconciler operations.
 type operation string
@@ -863,8 +856,8 @@ func loadRepo(ctx context.Context, tx RepoStore, id api.RepoID) (*repos.Repo, er
 	return rs[0], nil
 }
 
-func loadExternalService(ctx context.Context, reposStore RepoStore, repo *repos.Repo) (*repos.ExternalService, error) {
-	var externalService *repos.ExternalService
+func loadExternalService(ctx context.Context, reposStore RepoStore, repo *repos.Repo) (*types.ExternalService, error) {
+	var externalService *types.ExternalService
 	args := repos.StoreListExternalServicesArgs{IDs: repo.ExternalServiceIDs()}
 
 	es, err := reposStore.ListExternalServices(ctx, args)

@@ -37,12 +37,13 @@ export function getProviders(
     options: {
         patternType: SearchPatternType
         globbing: boolean
+        enableSmartQuery: boolean
         interpretComments?: boolean
     }
 ): SearchFieldProviders {
     const scannedQueries = searchQueries.pipe(
         map(rawQuery => {
-            const scanned = scanSearchQuery(rawQuery, options.interpretComments ?? false)
+            const scanned = scanSearchQuery(rawQuery, options.interpretComments ?? false, options.patternType)
             return { rawQuery, scanned }
         }),
         publishReplay(1),
@@ -55,10 +56,10 @@ export function getProviders(
         tokens: {
             getInitialState: () => SCANNER_STATE,
             tokenize: line => {
-                const result = scanSearchQuery(line, options.interpretComments ?? false)
+                const result = scanSearchQuery(line, options.interpretComments ?? false, options.patternType)
                 if (result.type === 'success') {
                     return {
-                        tokens: getMonacoTokens(result.term),
+                        tokens: getMonacoTokens(result.term, options.enableSmartQuery),
                         endState: SCANNER_STATE,
                     }
                 }
@@ -71,7 +72,9 @@ export function getProviders(
                     .pipe(
                         first(),
                         map(({ scanned }) =>
-                            scanned.type === 'error' ? null : getHoverResult(scanned.term, position)
+                            scanned.type === 'error'
+                                ? null
+                                : getHoverResult(scanned.term, position, options.enableSmartQuery)
                         ),
                         takeUntil(fromEventPattern(handler => token.onCancellationRequested(handler)))
                     )

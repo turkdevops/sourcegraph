@@ -1,5 +1,24 @@
 import { IRange } from 'monaco-editor'
 import { filterTypeKeysWithAliases } from '../interactive/util'
+import { SearchPatternType } from '../../graphql-operations'
+
+/**
+ * Defines common properties for tokens.
+ */
+export interface BaseToken {
+    type: Token['type']
+    range: CharacterRange
+}
+
+/**
+ * All recognized tokens.
+ */
+export type Token = Whitespace | OpeningParen | ClosingParen | Keyword | Comment | Literal | Pattern | Filter | Quoted
+
+/**
+ * A scanner produces a term, which is either a token or a list of tokens.
+ */
+export type Term = Token | Token[]
 
 /**
  * Represents a zero-indexed character range in a single-line search query.
@@ -32,9 +51,11 @@ export enum PatternKind {
     Structural,
 }
 
-export interface Pattern {
+/**
+ * A value interpreted as a pattern of kind {@link PatternKind}.
+ */
+export interface Pattern extends BaseToken {
     type: 'pattern'
-    range: CharacterRange
     kind: PatternKind
     value: string
 }
@@ -44,9 +65,8 @@ export interface Pattern {
  *
  * Example: `Conn`.
  */
-export interface Literal {
+export interface Literal extends BaseToken {
     type: 'literal'
-    range: CharacterRange
     value: string
 }
 
@@ -55,11 +75,10 @@ export interface Literal {
  *
  * Example: `repo:^github\.com\/sourcegraph\/sourcegraph$`.
  */
-export interface Filter {
+export interface Filter extends BaseToken {
     type: 'filter'
-    range: CharacterRange
-    filterType: Literal
-    filterValue: Quoted | Literal | undefined
+    field: Literal
+    value: Quoted | Literal | undefined
     negated: boolean
 }
 
@@ -74,10 +93,9 @@ export enum KeywordKind {
  *
  * Current keywords are: AND, and, OR, or, NOT, not.
  */
-export interface Keyword {
+export interface Keyword extends BaseToken {
     type: 'keyword'
     value: string
-    range: CharacterRange
     kind: KeywordKind
 }
 
@@ -86,9 +104,8 @@ export interface Keyword {
  *
  * Example: "Conn".
  */
-export interface Quoted {
+export interface Quoted extends BaseToken {
     type: 'quoted'
-    range: CharacterRange
     quotedValue: string
 }
 
@@ -97,30 +114,22 @@ export interface Quoted {
  *
  * Example: `// Oh hai`
  */
-export interface Comment {
+export interface Comment extends BaseToken {
     type: 'comment'
-    range: CharacterRange
     value: string
 }
 
-export interface Whitespace {
+export interface Whitespace extends BaseToken {
     type: 'whitespace'
-    range: CharacterRange
 }
 
-export interface OpeningParen {
+export interface OpeningParen extends BaseToken {
     type: 'openingParen'
-    range: CharacterRange
 }
 
-export interface ClosingParen {
+export interface ClosingParen extends BaseToken {
     type: 'closingParen'
-    range: CharacterRange
 }
-
-export type Token = Whitespace | OpeningParen | ClosingParen | Keyword | Comment | Literal | Pattern | Filter | Quoted
-
-export type Term = Token | Token[]
 
 /**
  * Represents the failed result of running a {@link Scanner} on a search query.
@@ -135,7 +144,7 @@ interface ScanError {
     expected: string
 
     /**
-     * The index in the search query string where parsing failed.
+     * The index in the search query string where scanning failed.
      */
     at: number
 }
@@ -274,6 +283,113 @@ const scanToken = <T extends Term = Literal>(
     }
 }
 
+/**
+ * ScanBalancedLiteral attempts to scan balanced parentheses as literal strings. This
+ * ensures that we interpret patterns containing parentheses _as patterns_ and not
+ * groups. For example, it accepts these patterns:
+ *
+ * ((a|b)|c)              - a regular expression with balanced parentheses for grouping
+ * myFunction(arg1, arg2) - a literal string with parens that should be literally interpreted
+ * foo(...)               - a structural search pattern
+ *
+ * If it weren't for this scanner, the above parentheses would have to be
+ * interpreted as part of the query language group syntax, like these:
+ *
+ * (foo or (bar and baz))
+ *
+ * So, this scanner detects parentheses as patterns without needing the user to
+ * explicitly escape them. As such, there are cases where this scanner should
+ * not succeed:
+ *
+ * (foo or (bar and baz)) - a valid query with and/or expression groups in the query langugae
+ * (repo:foo bar baz)     - a valid query containing a recognized repo: field. Here parentheses are interpreted as a group, not a pattern.
+ */
+export const scanBalancedLiteral: Scanner<Literal> = (input, start) => {
+    let adjustedStart = start
+    let balanced = 0
+    let current = ''
+    const result: string[] = []
+
+    const nextChar = (): void => {
+        current = input[adjustedStart]
+        adjustedStart += 1
+    }
+
+    if (!keepScanning(input, start)) {
+        return {
+            type: 'error',
+            expected: 'no recognized filter or keyword',
+            at: start,
+        }
+    }
+
+    while (input[adjustedStart] !== undefined) {
+        nextChar()
+        if (current.match(/\s/) && balanced === 0) {
+            // Stop scanning a potential pattern when we see whitespace in a balanced state.
+            adjustedStart -= 1 // Backtrack.
+            break
+        } else if (current === '(') {
+            if (!keepScanning(input, adjustedStart)) {
+                return {
+                    type: 'error',
+                    expected: 'no recognized filter or keyword',
+                    at: adjustedStart,
+                }
+            }
+            balanced += 1
+            result.push(current)
+        } else if (current === ')') {
+            balanced -= 1
+            if (balanced < 0) {
+                // This paren is an unmatched closing paren, so we stop treating it as a potential
+                // pattern here--it might be closing a group.
+                adjustedStart -= 1 // Backtrack.
+                balanced = 0 // Pattern is balanced up to this point
+                break
+            }
+            result.push(current)
+        } else if (current === ' ') {
+            if (!keepScanning(input, adjustedStart)) {
+                return {
+                    type: 'error',
+                    expected: 'no recognized filter or keyword',
+                    at: adjustedStart,
+                }
+            }
+            result.push(current)
+        } else if (current === '\\') {
+            if (input[adjustedStart] !== undefined) {
+                nextChar()
+                // Accept anything anything escaped. The point is to consume escaped spaces like "\ "
+                // so that we don't recognize it as terminating a pattern.
+                result.push('\\', current)
+                continue
+            }
+            result.push(current)
+        } else {
+            result.push(current)
+        }
+    }
+
+    if (balanced !== 0) {
+        return {
+            type: 'error',
+            expected: 'no unbalanced parentheses',
+            at: adjustedStart,
+        }
+    }
+
+    return {
+        type: 'success',
+        term: {
+            type: 'literal',
+            value: result.join(''),
+            range: { start, end: adjustedStart },
+        },
+    }
+}
+
 const whitespace = scanToken(/\s+/, (_input, range) => ({
     type: 'whitespace',
     range,
@@ -313,7 +429,7 @@ const filterKeyword = scanToken(new RegExp(`-?(${filterTypeKeysWithAliases.join(
 
 const filterDelimiter = character(':')
 
-const filterValue = oneOf<Quoted | Literal>(quoted('"'), quoted("'"), literal)
+const filterValue = oneOf<Quoted | Literal>(quoted('"'), quoted("'"), scanBalancedLiteral, literal)
 
 const openingParen = scanToken(/\(/, (_input, range): OpeningParen => ({ type: 'openingParen', range }))
 
@@ -371,8 +487,8 @@ const filter: Scanner<Filter> = (input, start) => {
         term: {
             type: 'filter',
             range: { start, end: scannedValue ? scannedValue.term.range.end : scannedDelimiter.term.range.end },
-            filterType: scannedKeyword.term,
-            filterValue: scannedValue?.term,
+            field: scannedKeyword.term,
+            value: scannedValue?.term,
             negated: scannedKeyword.term.value.startsWith('-'),
         },
     }
@@ -392,118 +508,21 @@ const scanFilterOrKeyword = oneOf<Literal | Token[]>(filterKeyword, followedBy(k
 const keepScanning = (input: string, start: number): boolean => scanFilterOrKeyword(input, start).type !== 'success'
 
 /**
- * ScanBalancedPattern attempts to scan balanced parentheses as literal patterns. This
- * ensures that we interpret patterns containing parentheses _as patterns_ and not
- * groups. For example, it accepts these patterns:
+ * A helper function that maps a {@link Literal} scanner result to a {@link Pattern} scanner.
  *
- * ((a|b)|c)              - a regular expression with balanced parentheses for grouping
- * myFunction(arg1, arg2) - a literal string with parens that should be literally interpreted
- * foo(...)               - a structural search pattern
- *
- * If it weren't for this scanner, the above parentheses would have to be
- * interpreted as part of the query language group syntax, like these:
- *
- * (foo or (bar and baz))
- *
- * So, this scanner detects parentheses as patterns without needing the user to
- * explicitly escape them. As such, there are cases where this scanner should
- * not succeed:
- *
- * (foo or (bar and baz)) - a valid query with and/or expression groups in the query langugae
- * (repo:foo bar baz)     - a valid query containing a recognized repo: field. Here parentheses are interpreted as a group, not a pattern.
+ * @param scanner The literal scanner.
+ * @param kind The {@link PatternKind} label to apply to the resulting pattern scanner.
  */
-export const scanBalancedPattern = (kind = PatternKind.Literal): Scanner<Pattern> => (input, start) => {
-    let adjustedStart = start
-    let balanced = 0
-    let current = ''
-    const result: string[] = []
-
-    const nextChar = (): void => {
-        current = input[adjustedStart]
-        adjustedStart += 1
+export const toPatternResult = (scanner: Scanner<Literal>, kind: PatternKind): Scanner<Pattern> => (input, start) => {
+    const result = scanner(input, start)
+    if (result.type === 'success') {
+        return createPattern(result.term.value, result.term.range, kind)
     }
-
-    if (!keepScanning(input, start)) {
-        return {
-            type: 'error',
-            expected: 'no recognized filter or keyword',
-            at: start,
-        }
-    }
-
-    while (input[adjustedStart] !== undefined) {
-        nextChar()
-        if (current === ' ' && balanced === 0) {
-            // Stop scanning a potential pattern when we see whitespace in a balanced state.
-            adjustedStart -= 1 // Backtrack.
-            break
-        } else if (current === '(') {
-            if (!keepScanning(input, adjustedStart)) {
-                return {
-                    type: 'error',
-                    expected: 'no recognized filter or keyword',
-                    at: adjustedStart,
-                }
-            }
-            balanced += 1
-            result.push(current)
-        } else if (current === ')') {
-            balanced -= 1
-            if (balanced < 0) {
-                // This paren is an unmatched closing paren, so we stop treating it as a potential
-                // pattern here--it might be closing a group.
-                adjustedStart -= 1 // Backtrack.
-                balanced = 0 // Pattern is balanced up to this point
-                break
-            }
-            result.push(current)
-        } else if (current === ' ') {
-            if (!keepScanning(input, adjustedStart)) {
-                return {
-                    type: 'error',
-                    expected: 'no recognized filter or keyword',
-                    at: adjustedStart,
-                }
-            }
-            result.push(current)
-        } else if (current === '\\') {
-            if (input[adjustedStart] !== undefined) {
-                nextChar()
-                // Accept anything anything escaped. The point is to consume escaped spaces like "\ "
-                // so that we don't recognize it as terminating a pattern.
-                result.push('\\', current)
-                continue
-            }
-            result.push(current)
-        } else {
-            result.push(current)
-        }
-    }
-
-    if (balanced !== 0) {
-        return {
-            type: 'error',
-            expected: 'no unbalanced parentheses',
-            at: adjustedStart,
-        }
-    }
-
-    return createPattern(result.join(''), { start, end: adjustedStart }, kind)
+    return result
 }
 
-const scanPattern = (kind: PatternKind): Scanner<Pattern> => (input, start) => {
-    const balancedPattern = scanBalancedPattern(kind)(input, start)
-    if (balancedPattern.type === 'success') {
-        return createPattern(balancedPattern.term.value, balancedPattern.term.range, kind)
-    }
-
-    const anyPattern = literal(input, start)
-    if (anyPattern.type === 'success') {
-        return createPattern(anyPattern.term.value, anyPattern.term.range, kind)
-    }
-
-    return anyPattern
-}
+const scanPattern = (kind: PatternKind): Scanner<Pattern> =>
+    toPatternResult(oneOf<Literal>(scanBalancedLiteral, literal), kind)
 
 const whitespaceOrClosingParen = oneOf<Whitespace | ClosingParen>(whitespace, closingParen)
 
@@ -519,7 +538,7 @@ const createScanner = (kind: PatternKind, interpretComments?: boolean): Scanner<
     const baseScanner = [keyword, filter, ...quotedScanner, scanPattern(kind)]
     const tokenScanner: Scanner<Token>[] = interpretComments ? [comment, ...baseScanner] : baseScanner
 
-    const baseEarlyPatternScanner = [...quotedScanner, scanBalancedPattern(kind)]
+    const baseEarlyPatternScanner = [...quotedScanner, toPatternResult(scanBalancedLiteral, kind)]
     const earlyPatternScanner = interpretComments ? [comment, ...baseEarlyPatternScanner] : baseEarlyPatternScanner
 
     return zeroOrMore(
@@ -539,8 +558,20 @@ const createScanner = (kind: PatternKind, interpretComments?: boolean): Scanner<
 export const scanSearchQuery = (
     query: string,
     interpretComments?: boolean,
-    kind = PatternKind.Literal
+    searchPatternType = SearchPatternType.literal
 ): ScanResult<Token[]> => {
-    const scanner = createScanner(kind, interpretComments)
+    let patternKind
+    switch (searchPatternType) {
+        case SearchPatternType.literal:
+            patternKind = PatternKind.Literal
+            break
+        case SearchPatternType.regexp:
+            patternKind = PatternKind.Regexp
+            break
+        case SearchPatternType.structural:
+            patternKind = PatternKind.Structural
+            break
+    }
+    const scanner = createScanner(patternKind, interpretComments)
     return scanner(query, 0)
 }

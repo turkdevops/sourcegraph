@@ -8,15 +8,16 @@ import (
 	"github.com/graph-gophers/graphql-go"
 	"github.com/graph-gophers/graphql-go/relay"
 	"github.com/inconshreveable/log15"
+
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/auth/providers"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/envvar"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/suspiciousnames"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/types"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/db"
 	"github.com/sourcegraph/sourcegraph/internal/errcode"
+	"github.com/sourcegraph/sourcegraph/internal/types"
 )
 
 func (r *schemaResolver) User(ctx context.Context, args struct {
@@ -206,7 +207,7 @@ func (*schemaResolver) UpdateUser(ctx context.Context, args *updateUserArgs) (*U
 		DisplayName: args.DisplayName,
 		AvatarURL:   args.AvatarURL,
 	}
-	if args.Username != nil {
+	if args.Username != nil && viewerIsChangingUsername(ctx, userID, *args.Username) {
 		if !viewerCanChangeUsername(ctx, userID) {
 			return nil, fmt.Errorf("unable to change username because auth.enableUsernameChanges is false in site configuration")
 		}
@@ -344,6 +345,23 @@ func viewerCanChangeUsername(ctx context.Context, userID int32) bool {
 	}
 	// 🚨 SECURITY: Only site admins are allowed to change a user's username when auth.enableUsernameChanges == false.
 	return backend.CheckCurrentUserIsSiteAdmin(ctx) == nil
+}
+
+// Users may be trying to change their own username, or someone else's.
+//
+// The subjectUserID value represents the decoded user ID from the incoming
+// update request, and the proposedUsername is the value that would be applied
+// to that subject's record if all security checks pass.
+//
+// If that subject's username is different from the proposed one, then a
+// change is being attempted and may be rejected by viewerCanChangeUsername.
+func viewerIsChangingUsername(ctx context.Context, subjectUserID int32, proposedUsername string) bool {
+	subject, err := db.Users.GetByID(ctx, subjectUserID)
+	if err != nil {
+		log15.Warn("viewerIsChangingUsername", "error", err)
+		return true
+	}
+	return subject.Username != proposedUsername
 }
 
 func (r *UserResolver) Monitors(ctx context.Context, args *ListMonitorsArgs) (MonitorConnectionResolver, error) {

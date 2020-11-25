@@ -15,6 +15,26 @@ All notable changes to Sourcegraph are documented in this file.
 
 ### Added
 
+- Password reset link expiration can be customized via `auth.passwordResetLinkExpiry` in the site config. [#13999](https://github.com/sourcegraph/sourcegraph/issues/13999)
+- Campaign steps may now include environment variables from outside of the campaign spec using [array syntax](http://docs.sourcegraph.com/campaigns/references/campaign_spec_yaml_reference#environment-array). [#15822](https://github.com/sourcegraph/sourcegraph/issues/15822)
+
+### Changed
+
+- Search indexer tuned to wait longer before assuming a deadlock has occurred. Previously if the indexserver had many cores (40+) and indexed a monorepo it could give up. [#16110](https://github.com/sourcegraph/sourcegraph/pull/16110)
+
+### Fixed
+
+- Syntax highlighting on files with mixed extension case (e.g. `.CPP` vs `.cpp`) now works as expected. [#11327](https://github.com/sourcegraph/sourcegraph/issues/11327)
+- After applying a campaign, some GitLab MRs might have had outdated state shown in the UI until the next sync with the code host. [#16100](https://github.com/sourcegraph/sourcegraph/pull/16100)
+
+### Removed
+
+-
+
+## 3.22.0
+
+### Added
+
 - GraphQL and TOML syntax highlighting is now back (special thanks to @rvantonder) [#13935](https://github.com/sourcegraph/sourcegraph/issues/13935)
 - Zig and DreamMaker syntax highlighting.
 - Campaigns now support publishing GitHub draft PRs and GitLab WIP MRs. [#7998](https://github.com/sourcegraph/sourcegraph/issues/7998)
@@ -22,6 +42,10 @@ All notable changes to Sourcegraph are documented in this file.
 - Pings now contain Redis & Postgres server versions. [14405](https://github.com/sourcegraph/sourcegraph/14405)
 - Aggregated usage data of the search onboarding tour is now included in pings. The data tracked are: total number of views of the onboarding tour, total number of views of each step in the onboarding tour, total number of tours closed. [#15113](https://github.com/sourcegraph/sourcegraph/pull/15113)
 - Users can now specify credentials for code hosts to enable campaigns for non site-admin users. [#15506](https://github.com/sourcegraph/sourcegraph/pull/15506)
+- A `campaigns.restrictToAdmins` site configuration option has been added to prevent non site-admin users from using campaigns. [#15785](https://github.com/sourcegraph/sourcegraph/pull/15785)
+- Number of page views on campaign apply page, page views on campaign details page after create/update, closed campaigns, created campaign specs and changesets specs and the sum of changeset diff stats will be sent back in pings. [#15279](https://github.com/sourcegraph/sourcegraph/pull/15279)
+- Users can now explicitly set their primary email address. [#15683](https://github.com/sourcegraph/sourcegraph/pull/15683)
+- "[Why code search is still needed for monorepos](https://docs.sourcegraph.com/adopt/code_search_in_monorepos)" doc page
 
 ### Changed
 
@@ -30,6 +54,7 @@ All notable changes to Sourcegraph are documented in this file.
 - Campaigns now have a fancy new icon. [#14740](https://github.com/sourcegraph/sourcegraph/pull/14740)
 - Search queries with an unbalanced closing paren `)` are now invalid, since this likely indicates an error. Previously, patterns with dangling `)` were valid in some cases. Note that patterns with dangling `)` can still be searched, but should be quoted via `content:"foo)"`. [#15042](https://github.com/sourcegraph/sourcegraph/pull/15042)
 - Extension providers can now return AsyncIterables, enabling dynamic provider results without dependencies. [#15042](https://github.com/sourcegraph/sourcegraph/issues/15061)
+- Deprecated the `"email.smtp": { "disableTLS" }` site config option, this field has been replaced by `"email.smtp": { "noVerifyTLS" }`. [#15682](https://github.com/sourcegraph/sourcegraph/pull/15682)
 
 ### Fixed
 
@@ -43,6 +68,11 @@ All notable changes to Sourcegraph are documented in this file.
 - Pushing commits to public GitLab repositories with campaigns now works, since we use the configured token even if the repository is public. [#15536](https://github.com/sourcegraph/sourcegraph/pull/15536)
 - `.kts` is now highlighted properly as Kotlin code, fixed various other issues in Kotlin syntax highlighting.
 - Fixed an issue where the value of `content:` was treated literally when the regular expression toggle is active. [#15639](https://github.com/sourcegraph/sourcegraph/pull/15639)
+- Fixed an issue where non-site admins were prohibited from updating some of their other personal metadata when `auth.enableUsernameChanges` was `false`. [#15663](https://github.com/sourcegraph/sourcegraph/issues/15663)
+- Fixed the `url` fields of repositories and trees in GraphQL returning URLs that were not %-encoded (e.g. when the repository name contained spaces). [#15667](https://github.com/sourcegraph/sourcegraph/issues/15667)
+- Fixed "Find references" showing errors in the references panel in place of the syntax-highlighted code for repositories with spaces in their name. [#15618](https://github.com/sourcegraph/sourcegraph/issues/15618)
+- Fixed an issue where specifying the `repohasfile` filter did not return results as expected unless `repo` was specified. [#15894](https://github.com/sourcegraph/sourcegraph/pull/15894)
+- Fixed an issue causing user input in the search query field to be erased in some cases. [#15921](https://github.com/sourcegraph/sourcegraph/issues/15921).
 
 ### Removed
 

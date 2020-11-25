@@ -11,17 +11,18 @@ import (
 
 	"github.com/graph-gophers/graphql-go"
 	"github.com/graph-gophers/graphql-go/relay"
+	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/types"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/db"
 	"github.com/sourcegraph/sourcegraph/internal/env"
 	"github.com/sourcegraph/sourcegraph/internal/repoupdater"
+	"github.com/sourcegraph/sourcegraph/internal/types"
 )
 
 var extsvcConfigAllowEdits, _ = strconv.ParseBool(env.Get("EXTSVC_CONFIG_ALLOW_EDITS", "false", "When EXTSVC_CONFIG_FILE is in use, allow edits in the application to be made which will be overwritten on next process restart"))
@@ -37,14 +38,24 @@ type addExternalServiceInput struct {
 	Namespace   *graphql.ID
 }
 
-func currentUserAllowedExternalServices(ctx context.Context) bool {
-	allowUserExternalServices := conf.ExternalServiceUserMode()
-	if !allowUserExternalServices {
-		// The user may have a tag that opts them in
-		err := backend.CheckActorHasTag(ctx, backend.TagAllowUserExternalServicePublic)
-		allowUserExternalServices = err == nil
+func currentUserAllowedExternalServices(ctx context.Context) conf.ExternalServiceMode {
+	mode := conf.ExternalServiceUserMode()
+	if mode != conf.ExternalServiceModeDisabled {
+		return mode
 	}
-	return allowUserExternalServices
+
+	// The user may have a tag that opts them in
+	err := backend.CheckActorHasTag(ctx, backend.TagAllowUserExternalServicePrivate)
+	if err == nil {
+		return conf.ExternalServiceModeAll
+	}
+
+	err = backend.CheckActorHasTag(ctx, backend.TagAllowUserExternalServicePublic)
+	if err == nil {
+		return conf.ExternalServiceModePublic
+	}
+
+	return conf.ExternalServiceModeDisabled
 }
 
 func (r *schemaResolver) AddExternalService(ctx context.Context, args *addExternalServiceArgs) (*externalServiceResolver, error) {
@@ -57,7 +68,7 @@ func (r *schemaResolver) AddExternalService(ctx context.Context, args *addExtern
 	isSiteAdmin := backend.CheckCurrentUserIsSiteAdmin(ctx) == nil
 	allowUserExternalServices := currentUserAllowedExternalServices(ctx)
 	if args.Input.Namespace != nil {
-		if !allowUserExternalServices {
+		if allowUserExternalServices == conf.ExternalServiceModeDisabled {
 			return nil, errors.New("allow users to add external services is not enabled")
 		}
 
@@ -228,7 +239,9 @@ func (*schemaResolver) DeleteExternalService(ctx context.Context, args *deleteEx
 	// The user doesn't care if triggering syncing failed when deleting a
 	// service, so kick off in the background.
 	go func() {
-		_ = syncExternalService(context.Background(), es)
+		if err := syncExternalService(context.Background(), es); err != nil {
+			log15.Error("Performing final sync after external service deletion", "err", err)
+		}
 	}()
 
 	return &EmptyResponse{}, nil

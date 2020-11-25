@@ -9,8 +9,14 @@ import (
 )
 
 type CodeMonitorsResolver interface {
+	// Query
 	Monitors(ctx context.Context, userID int32, args *ListMonitorsArgs) (MonitorConnectionResolver, error)
+
+	// Mutations
 	CreateCodeMonitor(ctx context.Context, args *CreateCodeMonitorArgs) (MonitorResolver, error)
+	ToggleCodeMonitor(ctx context.Context, args *ToggleCodeMonitorArgs) (MonitorResolver, error)
+	DeleteCodeMonitor(ctx context.Context, args *DeleteCodeMonitorArgs) (*EmptyResponse, error)
+	UpdateCodeMonitor(ctx context.Context, args *UpdateCodeMonitorArgs) (MonitorResolver, error)
 }
 
 type MonitorConnectionResolver interface {
@@ -69,12 +75,18 @@ type MonitorEmailResolver interface {
 	Enabled() bool
 	Priority() string
 	Header() string
-	Recipient(ctx context.Context) (MonitorEmailRecipient, error)
+	Recipients(ctx context.Context, args *ListRecipientsArgs) (MonitorActionEmailRecipientsConnectionResolver, error)
 	Events(ctx context.Context, args *ListEventsArgs) (MonitorActionEventConnectionResolver, error)
 }
 
 type MonitorEmailRecipient interface {
 	ToUser() (*UserResolver, bool)
+}
+
+type MonitorActionEmailRecipientsConnectionResolver interface {
+	Nodes(ctx context.Context) ([]NamespaceResolver, error)
+	TotalCount(ctx context.Context) (int32, error)
+	PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error)
 }
 
 type MonitorActionEventConnectionResolver interface {
@@ -105,12 +117,15 @@ type ListActionArgs struct {
 	After *string
 }
 
+type ListRecipientsArgs struct {
+	First int32
+	After *string
+}
+
 type CreateCodeMonitorArgs struct {
-	Namespace   graphql.ID
-	Description string
-	Enabled     bool
-	Trigger     *CreateTriggerArgs
-	Actions     []*CreateActionArgs
+	Monitor *CreateMonitorArgs
+	Trigger *CreateTriggerArgs
+	Actions []*CreateActionArgs
 }
 
 type CreateTriggerArgs struct {
@@ -128,6 +143,46 @@ type CreateActionEmailArgs struct {
 	Header     string
 }
 
+type ToggleCodeMonitorArgs struct {
+	Id      graphql.ID
+	Enabled bool
+}
+
+type DeleteCodeMonitorArgs struct {
+	Id graphql.ID
+}
+
+type CreateMonitorArgs struct {
+	Namespace   graphql.ID
+	Description string
+	Enabled     bool
+}
+
+type EditActionEmailArgs struct {
+	Id     *graphql.ID
+	Update *CreateActionEmailArgs
+}
+
+type EditActionArgs struct {
+	Email *EditActionEmailArgs
+}
+
+type EditTriggerArgs struct {
+	Id     graphql.ID
+	Update *CreateTriggerArgs
+}
+
+type EditMonitorArgs struct {
+	Id     graphql.ID
+	Update *CreateMonitorArgs
+}
+
+type UpdateCodeMonitorArgs struct {
+	Monitor *EditMonitorArgs
+	Trigger *EditTriggerArgs
+	Actions []*EditActionArgs
+}
+
 var DefaultCodeMonitorsResolver = &defaultCodeMonitorsResolver{}
 
 var codeMonitorsOnlyInEnterprise = errors.New("code monitors are only available in enterprise")
@@ -140,5 +195,17 @@ func (d defaultCodeMonitorsResolver) Monitors(ctx context.Context, userID int32,
 }
 
 func (d defaultCodeMonitorsResolver) CreateCodeMonitor(ctx context.Context, args *CreateCodeMonitorArgs) (MonitorResolver, error) {
+	return nil, codeMonitorsOnlyInEnterprise
+}
+
+func (d defaultCodeMonitorsResolver) ToggleCodeMonitor(ctx context.Context, args *ToggleCodeMonitorArgs) (MonitorResolver, error) {
+	return nil, codeMonitorsOnlyInEnterprise
+}
+
+func (d defaultCodeMonitorsResolver) DeleteCodeMonitor(ctx context.Context, args *DeleteCodeMonitorArgs) (*EmptyResponse, error) {
+	return nil, codeMonitorsOnlyInEnterprise
+}
+
+func (d defaultCodeMonitorsResolver) UpdateCodeMonitor(ctx context.Context, args *UpdateCodeMonitorArgs) (MonitorResolver, error) {
 	return nil, codeMonitorsOnlyInEnterprise
 }
