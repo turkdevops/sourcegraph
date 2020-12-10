@@ -50,6 +50,9 @@ type SearchArgs struct {
 	After          *string
 	First          *int32
 	VersionContext *string
+
+	// For tests
+	Settings *schema.Settings
 }
 
 type SearchImplementer interface {
@@ -66,9 +69,14 @@ func NewSearchImplementer(ctx context.Context, args *SearchArgs) (_ SearchImplem
 		tr.SetError(err)
 		tr.Finish()
 	}()
-	settings, err := decodedViewerFinalSettings(ctx)
-	if err != nil {
-		return nil, err
+
+	settings := args.Settings
+	if settings == nil {
+		var err error
+		settings, err = decodedViewerFinalSettings(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	useNewParser := getBoolPtr(settings.SearchMigrateParser, true)
@@ -217,7 +225,7 @@ func detectSearchType(version string, patternType *string) (query.SearchType, er
 		case "V2":
 			searchType = query.SearchTypeLiteral
 		default:
-			return -1, fmt.Errorf("unrecognized version: %v", version)
+			return -1, fmt.Errorf("unrecognized version want \"V1\" or \"V2\": %v", version)
 		}
 	}
 	return searchType, nil
@@ -899,7 +907,7 @@ func resolveRepositories(ctx context.Context, op resolveRepoOp) (resolvedReposit
 		}
 	}
 
-	var defaultRepos []*types.Repo
+	var defaultRepos []*types.RepoName
 	if envvar.SourcegraphDotComMode() && len(includePatterns) == 0 {
 		start := time.Now()
 		defaultRepos, err = defaultRepositories(ctx, db.DefaultRepos.List, search.Indexed(), excludePatterns)
@@ -914,7 +922,7 @@ func resolveRepositories(ctx context.Context, op resolveRepoOp) (resolvedReposit
 		}
 	}
 
-	var repos []*types.Repo
+	var repos []*types.RepoName
 	var excluded excludedRepos
 	if len(defaultRepos) > 0 {
 		repos = defaultRepos
@@ -924,7 +932,6 @@ func resolveRepositories(ctx context.Context, op resolveRepoOp) (resolvedReposit
 	} else {
 		tr.LazyPrintf("Repos.List - start")
 		options := db.ReposListOptions{
-			OnlyRepoIDs:     true,
 			IncludePatterns: includePatterns,
 			Names:           versionContextRepositories,
 			ExcludePattern:  unionRegExps(excludePatterns),
@@ -945,7 +952,7 @@ func resolveRepositories(ctx context.Context, op resolveRepoOp) (resolvedReposit
 			excludedC <- computeExcludedRepositories(ctx, op.query, options)
 		}()
 
-		repos, err = db.Repos.List(ctx, options)
+		repos, err = db.Repos.ListRepoNames(ctx, options)
 		tr.LazyPrintf("Repos.List - done")
 
 		excluded = <-excludedC
@@ -1014,7 +1021,7 @@ func resolveRepositories(ctx context.Context, op resolveRepoOp) (resolvedReposit
 			// taking a long time because they all ask gitserver to try to fetch from the remote
 			// repo.
 			trimmedRefSpec := strings.TrimPrefix(rev.RevSpec, "^") // handle negated revisions, such as ^<branch>, ^<tag>, or ^<commit>
-			if _, err := git.ResolveRevision(ctx, repoRev.GitserverRepo(), nil, trimmedRefSpec, git.ResolveRevisionOptions{NoEnsureRevision: true}); err != nil {
+			if _, err := git.ResolveRevision(ctx, repoRev.GitserverRepo(), trimmedRefSpec, git.ResolveRevisionOptions{NoEnsureRevision: true}); err != nil {
 				if errors.Is(err, context.DeadlineExceeded) {
 					return resolvedRepositories{}, context.DeadlineExceeded
 				}
@@ -1058,9 +1065,9 @@ func resolveRepositories(ctx context.Context, op resolveRepoOp) (resolvedReposit
 	}, err
 }
 
-type defaultReposFunc func(ctx context.Context) ([]*types.Repo, error)
+type defaultReposFunc func(ctx context.Context) ([]*types.RepoName, error)
 
-func defaultRepositories(ctx context.Context, getRawDefaultRepos defaultReposFunc, z *searchbackend.Zoekt, excludePatterns []string) ([]*types.Repo, error) {
+func defaultRepositories(ctx context.Context, getRawDefaultRepos defaultReposFunc, z *searchbackend.Zoekt, excludePatterns []string) ([]*types.RepoName, error) {
 	// Get the list of default repos from the db.
 	defaultRepos, err := getRawDefaultRepos(ctx)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/envvar"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend"
 	ee "github.com/sourcegraph/sourcegraph/enterprise/internal/campaigns"
+	"github.com/sourcegraph/sourcegraph/enterprise/internal/campaigns/search"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/campaigns"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
@@ -641,6 +642,17 @@ func listChangesetOptsFromArgs(args *graphqlbackend.ListChangesetsArgs, campaign
 		opts.OwnedByCampaignID = campaignID
 		opts.PublicationState = &published
 	}
+	if args.Search != nil {
+		ts, err := search.ParseChangesetSearch(*args.Search)
+		if err != nil {
+			return opts, false, errors.Wrap(err, "parsing search")
+		}
+		opts.TextSearch = ts.TextSearch
+		// Since we search for the repository name in text searches, the
+		// presence or absence of results may leak information about hidden
+		// repositories.
+		safe = false
+	}
 
 	return opts, safe, nil
 }
@@ -713,10 +725,18 @@ func (r *Resolver) CreateCampaignsCredential(ctx context.Context, args *graphqlb
 		return nil, err
 	}
 
-	// Check user is authenticated.
-	user := actor.FromContext(ctx)
-	if !user.IsAuthenticated() {
-		return nil, backend.ErrNotAuthenticated
+	userID, err := graphqlbackend.UnmarshalUserID(args.User)
+	if err != nil {
+		return nil, err
+	}
+
+	if userID == 0 {
+		return nil, ErrIDIsZero{}
+	}
+
+	// 🚨 SECURITY: Check that the requesting user can create the credential.
+	if err := backend.CheckSiteAdminOrSameUser(ctx, userID); err != nil {
+		return nil, err
 	}
 
 	// Need to validate externalServiceKind, otherwise this'll panic.
@@ -735,7 +755,7 @@ func (r *Resolver) CreateCampaignsCredential(ctx context.Context, args *graphqlb
 		Domain:              db.UserCredentialDomainCampaigns,
 		ExternalServiceID:   args.ExternalServiceURL,
 		ExternalServiceType: extsvc.KindToType(kind),
-		UserID:              user.UID,
+		UserID:              userID,
 	}
 
 	// Throw error documented in schema.graphql.

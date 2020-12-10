@@ -169,7 +169,7 @@ func TestExternalServicesStore_ValidateConfig(t *testing.T) {
 			name:         "gjson handles comments",
 			kind:         extsvc.KindGitHub,
 			config:       `{"url": "https://github.com", "token": "abc", "repositoryQuery": ["affiliated"]} // comment`,
-			hasNamespace: true,
+			hasNamespace: false,
 			wantErr:      "<nil>",
 		},
 		{
@@ -192,6 +192,20 @@ func TestExternalServicesStore_ValidateConfig(t *testing.T) {
 			config:       `{"url": "https://github.com", "rateLimit": {}}`,
 			hasNamespace: true,
 			wantErr:      `field "rateLimit" is not allowed in a user-added external service`,
+		},
+		{
+			name:         "authorization required for GitHub",
+			kind:         extsvc.KindGitHub,
+			config:       `{"url": "https://github.com", "token": "abc", "repos": ["abc/testrepo"]}`,
+			hasNamespace: true,
+			wantErr:      "1 error occurred:\n\t* authorization required\n\n",
+		},
+		{
+			name:         "authorization required for GitLab",
+			kind:         extsvc.KindGitHub,
+			config:       `{"url": "https://gitlab.com", "token": "abc", "repos": ["abc/testrepo"]}`,
+			hasNamespace: true,
+			wantErr:      "1 error occurred:\n\t* authorization required\n\n",
 		},
 	}
 	for _, test := range tests {
@@ -474,6 +488,11 @@ VALUES (%d, 1, ''), (%d, 2, '')
 	want := []*types.Repo{
 		{ID: 2, Name: "github.com/user/repo2"},
 	}
+
+	repos = types.Repos(repos).With(func(r *types.Repo) {
+		r.CreatedAt = time.Time{}
+		r.Sources = nil
+	})
 	if diff := cmp.Diff(want, repos); diff != "" {
 		t.Fatalf("Repos mismatch (-want +got):\n%s", diff)
 	}
@@ -547,7 +566,7 @@ func TestExternalServicesStore_List(t *testing.T) {
 		{
 			Kind:            extsvc.KindGitHub,
 			DisplayName:     "GITHUB #1",
-			Config:          `{"url": "https://github.com", "repositoryQuery": ["none"], "token": "abc"}`,
+			Config:          `{"url": "https://github.com", "repositoryQuery": ["none"], "token": "abc", "authorization": {}}`,
 			NamespaceUserID: user.ID,
 		},
 		{

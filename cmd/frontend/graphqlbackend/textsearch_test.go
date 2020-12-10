@@ -27,7 +27,7 @@ import (
 )
 
 func TestSearchFilesInRepos(t *testing.T) {
-	mockSearchFilesInRepo = func(ctx context.Context, repo *types.Repo, gitserverRepo gitserver.Repo, rev string, info *search.TextPatternInfo, fetchTimeout time.Duration) (matches []*FileMatchResolver, limitHit bool, err error) {
+	mockSearchFilesInRepo = func(ctx context.Context, repo *types.RepoName, gitserverRepo gitserver.Repo, rev string, info *search.TextPatternInfo, fetchTimeout time.Duration) (matches []*FileMatchResolver, limitHit bool, err error) {
 		repoName := repo.Name
 		switch repoName {
 		case "foo/one":
@@ -114,7 +114,7 @@ func TestSearchFilesInRepos(t *testing.T) {
 }
 
 func TestSearchFilesInRepos_multipleRevsPerRepo(t *testing.T) {
-	mockSearchFilesInRepo = func(ctx context.Context, repo *types.Repo, gitserverRepo gitserver.Repo, rev string, info *search.TextPatternInfo, fetchTimeout time.Duration) (matches []*FileMatchResolver, limitHit bool, err error) {
+	mockSearchFilesInRepo = func(ctx context.Context, repo *types.RepoName, gitserverRepo gitserver.Repo, rev string, info *search.TextPatternInfo, fetchTimeout time.Duration) (matches []*FileMatchResolver, limitHit bool, err error) {
 		repoName := repo.Name
 		switch repoName {
 		case "foo":
@@ -221,20 +221,20 @@ func makeRepositoryRevisions(repos ...string) []*search.RepositoryRevisions {
 			// treat empty list as preferring master
 			revs = []search.RevisionSpecifier{{RevSpec: ""}}
 		}
-		r[i] = &search.RepositoryRevisions{Repo: &types.Repo{Name: api.RepoName(repoName)}, Revs: revs}
+		r[i] = &search.RepositoryRevisions{Repo: &types.RepoName{Name: api.RepoName(repoName)}, Revs: revs}
 	}
 	return r
 }
 
-func TestLimitSearcherRepos(t *testing.T) {
-	repos := func(names ...string) []*types.Repo {
-		var repos []*types.Repo
-		for _, name := range names {
-			repos = append(repos, &types.Repo{Name: api.RepoName(name)})
-		}
-		return repos
+func mkRepos(names ...string) []*types.RepoName {
+	var repos []*types.RepoName
+	for _, name := range names {
+		repos = append(repos, &types.RepoName{Name: api.RepoName(name)})
 	}
+	return repos
+}
 
+func TestLimitSearcherRepos(t *testing.T) {
 	repoRevs := func(repoRevs ...string) []*search.RepositoryRevisions {
 		var result []*search.RepositoryRevisions
 		for _, repoRev := range repoRevs {
@@ -253,7 +253,7 @@ func TestLimitSearcherRepos(t *testing.T) {
 				continue
 			}
 			result = append(result, &search.RepositoryRevisions{
-				Repo: &types.Repo{Name: api.RepoName(repo)},
+				Repo: &types.RepoName{Name: api.RepoName(repo)},
 				Revs: []search.RevisionSpecifier{{RevSpec: rev}},
 			})
 		}
@@ -265,7 +265,7 @@ func TestLimitSearcherRepos(t *testing.T) {
 		limit       int
 		input       []*search.RepositoryRevisions
 		want        []*search.RepositoryRevisions
-		wantLimited []*types.Repo
+		wantLimited []*types.RepoName
 	}{
 		{
 			name:        "non_limited",
@@ -279,21 +279,21 @@ func TestLimitSearcherRepos(t *testing.T) {
 			limit:       5,
 			input:       repoRevs("a@1", "b@1", "c@1", "d@1", "e@1", "f@1", "g@1"),
 			want:        repoRevs("a@1", "b@1", "c@1", "d@1", "e@1"),
-			wantLimited: repos("f", "g"),
+			wantLimited: mkRepos("f", "g"),
 		},
 		{
 			name:        "rev_limited",
 			limit:       6,
 			input:       repoRevs("a@1", "a@2", "b@1", "c@1", "d@1", "e@1", "f@1", "g@1"),
 			want:        repoRevs("a@1", "a@2", "b@1", "c@1", "d@1", "e@1"),
-			wantLimited: repos("f", "g"),
+			wantLimited: mkRepos("f", "g"),
 		},
 		{
 			name:        "rev_limited_duplication",
 			limit:       6,
 			input:       repoRevs("a@1", "a@2", "b@1", "c@1", "d@1", "e@1", "f@1", "f@2", "g@1"),
 			want:        repoRevs("a@1", "a@2", "b@1", "c@1", "d@1", "e@1"),
-			wantLimited: repos("f", "g"),
+			wantLimited: mkRepos("f", "g"),
 		},
 	}
 	for _, tst := range tests {

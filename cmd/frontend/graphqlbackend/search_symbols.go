@@ -77,7 +77,7 @@ func searchSymbols(ctx context.Context, args *search.TextParameters, limit int) 
 		return nil, nil, err
 	}
 
-	common.repos = make([]*types.Repo, len(repos))
+	common.repos = make([]*types.RepoName, len(repos))
 	for i, repo := range repos {
 		common.repos[i] = repo.Repo
 	}
@@ -85,7 +85,7 @@ func searchSymbols(ctx context.Context, args *search.TextParameters, limit int) 
 	var searcherRepos []*search.RepositoryRevisions
 	if indexed.DisableUnindexedSearch {
 		tr.LazyPrintf("disabling unindexed search")
-		common.missing = make([]*types.Repo, len(indexed.Unindexed))
+		common.missing = make([]*types.RepoName, len(indexed.Unindexed))
 		for i, r := range indexed.Unindexed {
 			common.missing[i] = r.Repo
 		}
@@ -238,7 +238,7 @@ func searchSymbolsInRepo(ctx context.Context, repoRevs *search.RepositoryRevisio
 	// backend.{GitRepo,Repos.ResolveRev}) because that would slow this operation
 	// down by a lot (if we're looping over many repos). This means that it'll fail if a
 	// repo is not on gitserver.
-	commitID, err := git.ResolveRevision(ctx, repoRevs.GitserverRepo(), nil, inputRev, git.ResolveRevisionOptions{})
+	commitID, err := git.ResolveRevision(ctx, repoRevs.GitserverRepo(), inputRev, git.ResolveRevisionOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +248,7 @@ func searchSymbolsInRepo(ctx context.Context, repoRevs *search.RepositoryRevisio
 		return nil, err
 	}
 
-	repoResolver := NewRepositoryResolver(repoRevs.Repo)
+	repoResolver := NewRepositoryResolver(repoRevs.Repo.ToRepo())
 	commitResolver := &GitCommitResolver{
 		repoResolver: repoResolver,
 		oid:          GitObjectID(commitID),

@@ -12,7 +12,6 @@ import (
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 
-	"github.com/sourcegraph/sourcegraph/cmd/repo-updater/repos"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/campaigns"
 	"github.com/sourcegraph/sourcegraph/internal/db"
@@ -20,6 +19,7 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/auth"
 	"github.com/sourcegraph/sourcegraph/internal/gitserver/protocol"
+	"github.com/sourcegraph/sourcegraph/internal/repos"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/internal/workerutil"
 	"github.com/sourcegraph/sourcegraph/internal/workerutil/dbworker"
@@ -75,12 +75,12 @@ func (r *Reconciler) process(ctx context.Context, tx *Store, ch *campaigns.Chang
 		return nil
 	}
 
-	plan, err := determinePlan(prev, curr, ch)
+	plan, err := DetermineReconcilerPlan(prev, curr, ch)
 	if err != nil {
 		return err
 	}
 
-	log15.Info("Reconciler processing changeset", "changeset", ch.ID, "operations", plan.ops)
+	log15.Info("Reconciler processing changeset", "changeset", ch.ID, "operations", plan.Ops)
 
 	e := &executor{
 		sourcer:           r.Sourcer,
@@ -91,7 +91,7 @@ func (r *Reconciler) process(ctx context.Context, tx *Store, ch *campaigns.Chang
 		ch: ch,
 
 		spec:  curr,
-		delta: plan.delta,
+		delta: plan.Delta,
 	}
 
 	return e.ExecutePlan(ctx, plan)
@@ -118,7 +118,7 @@ type executor struct {
 	tx  *Store
 	ccs repos.ChangesetSource
 
-	repo   *repos.Repo
+	repo   *types.Repo
 	extSvc *types.ExternalService
 
 	// au is nil if we want to use the global credentials stored in the external
@@ -131,8 +131,8 @@ type executor struct {
 }
 
 // ExecutePlan executes the given reconciler plan.
-func (e *executor) ExecutePlan(ctx context.Context, plan *plan) (err error) {
-	if plan.ops.IsNone() {
+func (e *executor) ExecutePlan(ctx context.Context, plan *ReconcilerPlan) (err error) {
+	if plan.Ops.IsNone() {
 		return nil
 	}
 
@@ -161,7 +161,7 @@ func (e *executor) ExecutePlan(ctx context.Context, plan *plan) (err error) {
 	}
 
 	upsertChangesetEvents := true
-	for _, op := range plan.ops.ExecutionOrder() {
+	for _, op := range plan.Ops.ExecutionOrder() {
 		switch op {
 		case campaigns.ReconcilerOperationSync:
 			err = e.syncChangeset(ctx)
@@ -215,7 +215,7 @@ func (e *executor) ExecutePlan(ctx context.Context, plan *plan) (err error) {
 	return e.tx.UpdateChangeset(ctx, e.ch)
 }
 
-func (e *executor) buildChangesetSource(repo *repos.Repo, extSvc *types.ExternalService) (repos.ChangesetSource, error) {
+func (e *executor) buildChangesetSource(repo *types.Repo, extSvc *types.ExternalService) (repos.ChangesetSource, error) {
 	sources, err := e.sourcer(extSvc)
 	if err != nil {
 		return nil, err
@@ -283,7 +283,7 @@ func (e *executor) loadAuthenticator(ctx context.Context) (auth.Authenticator, e
 				return nil, nil
 			}
 
-			return nil, ErrMissingCredentials{repo: e.repo.Name}
+			return nil, ErrMissingCredentials{repo: string(e.repo.Name)}
 		}
 		return nil, errors.Wrap(err, "failed to load user credential")
 	}
@@ -309,6 +309,7 @@ func (e *executor) pushChangesetPatch(ctx context.Context) (err error) {
 		ExternalServiceType: e.ch.ExternalServiceType,
 		RepoID:              e.ch.RepoID,
 		ExternalBranch:      e.spec.Spec.HeadRef,
+		// TODO: Do we need to check whether it's published or not?
 	})
 	if err != nil && err != ErrNoResults {
 		return err
@@ -508,7 +509,7 @@ func (e *executor) pushCommit(ctx context.Context, opts protocol.CreateCommitFro
 	return nil
 }
 
-func buildCommitOpts(repo *repos.Repo, extSvc *types.ExternalService, spec *campaigns.ChangesetSpec, a auth.Authenticator) (protocol.CreateCommitFromPatchRequest, error) {
+func buildCommitOpts(repo *types.Repo, extSvc *types.ExternalService, spec *campaigns.ChangesetSpec, a auth.Authenticator) (protocol.CreateCommitFromPatchRequest, error) {
 	var opts protocol.CreateCommitFromPatchRequest
 
 	desc := spec.Spec
@@ -635,13 +636,13 @@ var operationPrecedence = map[campaigns.ReconcilerOperation]int{
 	campaigns.ReconcilerOperationSync:         6,
 }
 
-type operations []campaigns.ReconcilerOperation
+type ReconcilerOperations []campaigns.ReconcilerOperation
 
-func (ops operations) IsNone() bool {
+func (ops ReconcilerOperations) IsNone() bool {
 	return len(ops) == 0
 }
 
-func (ops operations) Equal(b operations) bool {
+func (ops ReconcilerOperations) Equal(b ReconcilerOperations) bool {
 	if len(ops) != len(b) {
 		return false
 	}
@@ -659,7 +660,7 @@ func (ops operations) Equal(b operations) bool {
 	return true
 }
 
-func (ops operations) String() string {
+func (ops ReconcilerOperations) String() string {
 	if ops.IsNone() {
 		return "No operations required"
 	}
@@ -671,7 +672,7 @@ func (ops operations) String() string {
 	return strings.Join(ss, " => ")
 }
 
-func (ops operations) ExecutionOrder() []campaigns.ReconcilerOperation {
+func (ops ReconcilerOperations) ExecutionOrder() []campaigns.ReconcilerOperation {
 	uniqueOps := []campaigns.ReconcilerOperation{}
 
 	// Make sure ops are unique.
@@ -692,27 +693,27 @@ func (ops operations) ExecutionOrder() []campaigns.ReconcilerOperation {
 	return uniqueOps
 }
 
-// plan represents the possible operations the reconciler needs to do
+// ReconcilerPlan represents the possible operations the reconciler needs to do
 // to reconcile the current and the desired state of a changeset.
-type plan struct {
+type ReconcilerPlan struct {
 	// The operations that need to be done to reconcile the changeset.
-	ops operations
+	Ops ReconcilerOperations
 
-	// The delta between a possible previous ChangesetSpec and the current
+	// The Delta between a possible previous ChangesetSpec and the current
 	// ChangesetSpec.
-	delta *ChangesetSpecDelta
+	Delta *ChangesetSpecDelta
 }
 
-func (p *plan) AddOp(op campaigns.ReconcilerOperation) { p.ops = append(p.ops, op) }
-func (p *plan) SetOp(op campaigns.ReconcilerOperation) { p.ops = operations{op} }
+func (p *ReconcilerPlan) AddOp(op campaigns.ReconcilerOperation) { p.Ops = append(p.Ops, op) }
+func (p *ReconcilerPlan) SetOp(op campaigns.ReconcilerOperation) { p.Ops = ReconcilerOperations{op} }
 
-// determinePlan looks at the given changeset to determine what action the
+// DetermineReconcilerPlan looks at the given changeset to determine what action the
 // reconciler should take.
 // It loads the current ChangesetSpec and if it exists also the previous one.
 // If the current ChangesetSpec is not applied to a campaign, it returns an
 // error.
-func determinePlan(previousSpec, currentSpec *campaigns.ChangesetSpec, ch *campaigns.Changeset) (*plan, error) {
-	pl := &plan{}
+func DetermineReconcilerPlan(previousSpec, currentSpec *campaigns.ChangesetSpec, ch *campaigns.Changeset) (*ReconcilerPlan, error) {
+	pl := &ReconcilerPlan{}
 
 	// If it doesn't have a spec, it's an imported changeset and we can't do
 	// anything.
@@ -733,7 +734,7 @@ func determinePlan(previousSpec, currentSpec *campaigns.ChangesetSpec, ch *campa
 	if err != nil {
 		return pl, nil
 	}
-	pl.delta = delta
+	pl.Delta = delta
 
 	switch ch.PublicationState {
 	case campaigns.ChangesetPublicationStateUnpublished:
@@ -816,7 +817,7 @@ func reopenAfterDetach(ch *campaigns.Changeset) bool {
 	return ch.AttachedTo(ch.OwnedByCampaignID)
 }
 
-func loadRepo(ctx context.Context, tx RepoStore, id api.RepoID) (*repos.Repo, error) {
+func loadRepo(ctx context.Context, tx RepoStore, id api.RepoID) (*types.Repo, error) {
 	rs, err := tx.ListRepos(ctx, repos.StoreListReposArgs{IDs: []api.RepoID{id}})
 	if err != nil {
 		return nil, err
@@ -827,7 +828,7 @@ func loadRepo(ctx context.Context, tx RepoStore, id api.RepoID) (*repos.Repo, er
 	return rs[0], nil
 }
 
-func loadExternalService(ctx context.Context, reposStore RepoStore, repo *repos.Repo) (*types.ExternalService, error) {
+func loadExternalService(ctx context.Context, reposStore RepoStore, repo *types.Repo) (*types.ExternalService, error) {
 	var externalService *types.ExternalService
 	args := repos.StoreListExternalServicesArgs{IDs: repo.ExternalServiceIDs()}
 
@@ -868,7 +869,11 @@ func loadExternalService(ctx context.Context, reposStore RepoStore, repo *repos.
 	return externalService, nil
 }
 
-func loadCampaign(ctx context.Context, tx *Store, id int64) (*campaigns.Campaign, error) {
+type getCampaigner interface {
+	GetCampaign(ctx context.Context, opts GetCampaignOpts) (*campaigns.Campaign, error)
+}
+
+func loadCampaign(ctx context.Context, tx getCampaigner, id int64) (*campaigns.Campaign, error) {
 	if id == 0 {
 		return nil, errors.New("changeset has no owning campaign")
 	}
@@ -903,7 +908,7 @@ func loadUser(ctx context.Context, id int32) (*types.User, error) {
 	return db.Users.GetByID(ctx, id)
 }
 
-func loadUserCredential(ctx context.Context, userID int32, repo *repos.Repo) (*db.UserCredential, error) {
+func loadUserCredential(ctx context.Context, userID int32, repo *types.Repo) (*db.UserCredential, error) {
 	return db.UserCredentials.GetByScope(ctx, db.UserCredentialScope{
 		Domain:              db.UserCredentialDomainCampaigns,
 		UserID:              userID,
@@ -912,7 +917,7 @@ func loadUserCredential(ctx context.Context, userID int32, repo *repos.Repo) (*d
 	})
 }
 
-func decorateChangesetBody(ctx context.Context, tx *Store, cs *repos.Changeset) error {
+func decorateChangesetBody(ctx context.Context, tx getCampaigner, cs *repos.Changeset) error {
 	campaign, err := loadCampaign(ctx, tx, cs.OwnedByCampaignID)
 	if err != nil {
 		return errors.Wrap(err, "failed to load campaign")

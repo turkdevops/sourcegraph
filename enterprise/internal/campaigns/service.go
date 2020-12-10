@@ -10,12 +10,12 @@ import (
 
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend"
-	"github.com/sourcegraph/sourcegraph/cmd/repo-updater/repos"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/campaigns"
 	"github.com/sourcegraph/sourcegraph/internal/db"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/auth"
 	"github.com/sourcegraph/sourcegraph/internal/httpcli"
+	"github.com/sourcegraph/sourcegraph/internal/repos"
 	"github.com/sourcegraph/sourcegraph/internal/repoupdater"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
 	"github.com/sourcegraph/sourcegraph/internal/types"
@@ -197,6 +197,27 @@ func (s *Service) GetCampaignMatchingCampaignSpec(ctx context.Context, spec *cam
 		err = nil
 	}
 	return campaign, err
+}
+
+// GetNewestCampaignSpec returns the newest campaign spec that matches the given
+// spec's namespace and name and is owned by the given user, or nil if none is found.
+func (s *Service) GetNewestCampaignSpec(ctx context.Context, tx *Store, spec *campaigns.CampaignSpec, userID int32) (*campaigns.CampaignSpec, error) {
+	opts := GetNewestCampaignSpecOpts{
+		UserID:          userID,
+		NamespaceUserID: spec.NamespaceUserID,
+		NamespaceOrgID:  spec.NamespaceOrgID,
+		Name:            spec.Spec.Name,
+	}
+
+	newest, err := tx.GetNewestCampaignSpec(ctx, opts)
+	if err != nil {
+		if err != ErrNoResults {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	return newest, nil
 }
 
 type MoveCampaignOpts struct {
