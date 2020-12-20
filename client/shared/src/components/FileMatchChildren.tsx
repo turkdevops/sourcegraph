@@ -12,13 +12,20 @@ import { calculateMatchGroups } from './FileMatchContext'
 import { Link } from './Link'
 import { BadgeAttachment } from './BadgeAttachment'
 import { isErrorLike } from '../util/errors'
-import { ISymbol } from '../graphql/schema'
+import { ISymbol, IHighlightLineRange } from '../graphql/schema'
 import { map } from 'rxjs/operators'
+
+export interface EventLogger {
+    log: (eventLabel: string, eventProperties?: any) => void
+}
 
 interface FileMatchProps extends SettingsCascadeProps, ThemeProps {
     location: H.Location
+    eventLogger?: EventLogger
     items: MatchItem[]
     result: FileLineMatch
+    /* Called when the first result has fully loaded. */
+    onFirstResultLoad?: () => void
     /**
      * Whether or not to show all matches for this file, or only a subset.
      */
@@ -27,7 +34,7 @@ interface FileMatchProps extends SettingsCascadeProps, ThemeProps {
      * The number of matches to show when the results are collapsed (allMatches===false, user has not clicked "Show N more matches")
      */
     subsetMatches: number
-    fetchHighlightedFileLines: (parameters: FetchFileParameters, force?: boolean) => Observable<string[]>
+    fetchHighlightedFileLineRanges: (parameters: FetchFileParameters, force?: boolean) => Observable<string[][]>
     /**
      * Called when the file's search result is selected.
      */
@@ -67,20 +74,58 @@ export const FileMatchChildren: React.FunctionComponent<FileMatchProps> = props 
         context,
     ])
 
-    const { result, isLightTheme, fetchHighlightedFileLines } = props
+    // If optimizeHighlighting is enabled, compile a list of the highlighted file ranges we want to
+    // fetch (instead of the entire file.)
+    const optimizeHighlighting =
+        props.settingsCascade.final &&
+        !isErrorLike(props.settingsCascade.final) &&
+        props.settingsCascade.final.experimentalFeatures &&
+        props.settingsCascade.final.experimentalFeatures.enableFastResultLoading
+
+    const { result, isLightTheme, fetchHighlightedFileLineRanges, eventLogger, onFirstResultLoad } = props
     const fetchHighlightedFileRangeLines = React.useCallback(
-        (startLine, endLine) =>
-            fetchHighlightedFileLines(
+        (isFirst, startLine, endLine) => {
+            const startTime = Date.now()
+            return fetchHighlightedFileLineRanges(
                 {
                     repoName: result.repository.name,
                     commitID: result.file.commit.oid,
                     filePath: result.file.path,
                     disableTimeout: false,
                     isLightTheme,
+                    ranges: optimizeHighlighting
+                        ? grouped.map(
+                              (group): IHighlightLineRange => ({
+                                  startLine: group.startLine,
+                                  endLine: group.endLine,
+                              })
+                          )
+                        : [{ startLine: 0, endLine: 2147483647 }], // entire file,
                 },
                 false
-            ).pipe(map(lines => lines.slice(startLine, endLine))),
-        [result, isLightTheme, fetchHighlightedFileLines]
+            ).pipe(
+                map(lines => {
+                    if (isFirst && onFirstResultLoad) {
+                        onFirstResultLoad()
+                    }
+                    if (eventLogger) {
+                        eventLogger.log('search.latencies.frontend.code-load', { durationMs: Date.now() - startTime })
+                    }
+                    return optimizeHighlighting
+                        ? lines[grouped.findIndex(group => group.startLine === startLine && group.endLine === endLine)]
+                        : lines[0].slice(startLine, endLine)
+                })
+            )
+        },
+        [
+            result,
+            isLightTheme,
+            fetchHighlightedFileLineRanges,
+            grouped,
+            optimizeHighlighting,
+            eventLogger,
+            onFirstResultLoad,
+        ]
     )
 
     if (NO_SEARCH_HIGHLIGHTING) {
@@ -105,7 +150,7 @@ export const FileMatchChildren: React.FunctionComponent<FileMatchProps> = props 
                     </code>
                 </Link>
             ))}
-            {grouped.map(group => (
+            {grouped.map((group, index) => (
                 <div
                     key={`linematch:${result.file.url}${group.position.line}:${group.position.character}`}
                     className="file-match-children__item-code-wrapper test-file-match-children-item-wrapper"
@@ -127,6 +172,7 @@ export const FileMatchChildren: React.FunctionComponent<FileMatchProps> = props 
                             className="file-match-children__item-code-excerpt"
                             isLightTheme={isLightTheme}
                             fetchHighlightedFileRangeLines={fetchHighlightedFileRangeLines}
+                            isFirst={index === 0}
                         />
                     </Link>
 

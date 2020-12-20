@@ -49,7 +49,8 @@ describe('CodeExcerpt', () => {
         isLightTheme: false,
         className: 'file-match__item-code-excerpt',
         fetchHighlightedFileRangeLines: () =>
-            of(HIGHLIGHTED_FILE_LINES_SIMPLE).pipe(map(lines => lines.slice(startLine, endLine))),
+            of(HIGHLIGHTED_FILE_LINES_SIMPLE).pipe(map(ranges => ranges[0].slice(startLine, endLine))),
+        isFirst: false,
     }
 
     it('renders correct number of rows', () => {
@@ -93,7 +94,7 @@ describe('CodeExcerpt', () => {
                 endLine={endLine}
                 highlightRanges={highlightRanges}
                 fetchHighlightedFileRangeLines={() =>
-                    of(HIGHLIGHTED_FILE_LINES).pipe(map(highlights => highlights.slice(startLine, endLine)))
+                    of(HIGHLIGHTED_FILE_LINES).pipe(map(ranges => ranges[0].slice(startLine, endLine)))
                 }
             />
         )
@@ -126,7 +127,7 @@ describe('CodeExcerpt', () => {
                 endLine={endLine}
                 highlightRanges={highlightRanges}
                 fetchHighlightedFileRangeLines={() =>
-                    of(HIGHLIGHTED_FILE_LINES_LONG).pipe(map(highlights => highlights.slice(startLine, endLine)))
+                    of(HIGHLIGHTED_FILE_LINES_LONG).pipe(map(ranges => ranges[0].slice(startLine, endLine)))
                 }
             />
         )
@@ -157,7 +158,7 @@ describe('CodeExcerpt', () => {
                 endLine={endLine}
                 highlightRanges={highlightRanges}
                 fetchHighlightedFileRangeLines={() =>
-                    of(HIGHLIGHTED_FILE_LINES_LONG).pipe(map(highlights => highlights.slice(startLine, endLine)))
+                    of(HIGHLIGHTED_FILE_LINES_LONG).pipe(map(ranges => ranges[0].slice(startLine, endLine)))
                 }
             />
         )

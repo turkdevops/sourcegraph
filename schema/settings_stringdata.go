@@ -35,6 +35,12 @@ const SettingsSchemaJSON = `{
           "default": false,
           "!go": { "pointer": true }
         },
+        "showCodeMonitoringTestEmailButton": {
+          "description": "Enables the 'Send test email' debugging button for code monitoring.",
+          "type": "boolean",
+          "default": false,
+          "!go": { "pointer": true }
+        },
         "searchStats": {
           "description": "Enables a new page that shows language statistics about the results for a search query.",
           "type": "boolean",
@@ -91,6 +97,12 @@ const SettingsSchemaJSON = `{
         },
         "enableSmartQuery": {
           "description": "Enables contextual syntax highlighting and hovers for search queries in the web app",
+          "type": "boolean",
+          "default": true,
+          "!go": { "pointer": true }
+        },
+        "enableFastResultLoading": {
+          "description": "Enables optimized search result loading (syntax highlighting / file contents fetching)",
           "type": "boolean",
           "default": false,
           "!go": { "pointer": true }

@@ -7,6 +7,7 @@ import { catchError, filter, switchMap, map, distinctUntilChanged } from 'rxjs/o
 import { highlightNode } from '../util/dom'
 import { asError, ErrorLike, isErrorLike } from '../util/errors'
 import { Repo } from '../util/url'
+import * as GQL from '../graphql/schema'
 
 export interface FetchFileParameters {
     repoName: string
@@ -14,6 +15,7 @@ export interface FetchFileParameters {
     filePath: string
     disableTimeout?: boolean
     isLightTheme: boolean
+    ranges: GQL.IHighlightLineRange[]
 }
 
 interface Props extends Repo {
@@ -24,11 +26,13 @@ interface Props extends Repo {
     startLine: number
     /** The 0-based (exclusive) line number that this code excerpt ends at */
     endLine: number
+    /** Whether or not this is the first result being shown or not. */
+    isFirst: boolean
     isLightTheme: boolean
     className?: string
     /** A function to fetch the range of lines this code excerpt will display. It will be provided
      * the same start and end lines properties that were provided as component props */
-    fetchHighlightedFileRangeLines: (startLine: number, endLine: number) => Observable<string[]>
+    fetchHighlightedFileRangeLines: (isFirst: boolean, startLine: number, endLine: number) => Observable<string[]>
 }
 
 interface HighlightRange {
@@ -67,17 +71,18 @@ export class CodeExcerpt extends React.PureComponent<Props, State> {
             combineLatest([this.propsChanges, this.visibilityChanges])
                 .pipe(
                     filter(([, isVisible]) => isVisible),
-                    map(([{ repoName, filePath, commitID, isLightTheme, startLine, endLine }]) => ({
+                    map(([{ repoName, filePath, commitID, isLightTheme, isFirst, startLine, endLine }]) => ({
                         repoName,
                         filePath,
                         commitID,
                         isLightTheme,
+                        isFirst,
                         startLine,
                         endLine,
                     })),
                     distinctUntilChanged((a, b) => isEqual(a, b)),
-                    switchMap(({ repoName, filePath, commitID, isLightTheme, startLine, endLine }) =>
-                        props.fetchHighlightedFileRangeLines(startLine, endLine)
+                    switchMap(({ repoName, filePath, commitID, isLightTheme, isFirst, startLine, endLine }) =>
+                        props.fetchHighlightedFileRangeLines(isFirst, startLine, endLine)
                     ),
                     catchError(error => [asError(error)])
                 )
