@@ -203,7 +203,7 @@ func (s *indexedSearchRequest) Repos() map[string]*search.RepositoryRevisions {
 type streamFunc func(context.Context, *search.TextParameters, *indexedRepoRevs, indexedRequestType, func(t time.Time) time.Duration) <-chan zoektSearchStreamEvent
 
 type indexedSearchEvent struct {
-	common  searchResultsCommon
+	common  SearchResultsCommon
 	results []*FileMatchResolver
 	err     error
 }
@@ -240,7 +240,7 @@ func (s *indexedSearchRequest) doSearch(ctx context.Context, c chan<- indexedSea
 		zoektStream = zoektSearchHEADOnlyFilesStream
 	default:
 		err := fmt.Errorf("unexpected indexedSearchRequest type: %q", s.typ)
-		c <- indexedSearchEvent{common: searchResultsCommon{}, results: nil, err: err}
+		c <- indexedSearchEvent{common: SearchResultsCommon{}, results: nil, err: err}
 		return
 	}
 
@@ -267,12 +267,12 @@ func (s *indexedSearchRequest) doSearch(ctx context.Context, c chan<- indexedSea
 
 		if err == errNoResultsInTimeout {
 			err = nil
-			c <- indexedSearchEvent{common: searchResultsCommon{status: mkStatusMap(search.RepoStatusTimedout | search.RepoStatusIndexed)}}
+			c <- indexedSearchEvent{common: SearchResultsCommon{Status: mkStatusMap(search.RepoStatusTimedout | search.RepoStatusIndexed)}}
 			return
 		}
 
 		if err != nil {
-			c <- indexedSearchEvent{common: searchResultsCommon{}, results: nil, err: err}
+			c <- indexedSearchEvent{common: SearchResultsCommon{}, results: nil, err: err}
 			return
 		}
 
@@ -294,9 +294,9 @@ func (s *indexedSearchRequest) doSearch(ctx context.Context, c chan<- indexedSea
 		}
 
 		c <- indexedSearchEvent{
-			common: searchResultsCommon{
-				status:   statusMap,
-				limitHit: event.limitHit,
+			common: SearchResultsCommon{
+				Status:     statusMap,
+				IsLimitHit: event.limitHit,
 			},
 			results: event.fm,
 			err:     nil,
@@ -305,7 +305,7 @@ func (s *indexedSearchRequest) doSearch(ctx context.Context, c chan<- indexedSea
 
 	// Successfully searched everything. Communicate every indexed repo was
 	// searched in case it didn't have a result.
-	c <- indexedSearchEvent{common: searchResultsCommon{status: mkStatusMap(search.RepoStatusSearched | search.RepoStatusIndexed)}}
+	c <- indexedSearchEvent{common: SearchResultsCommon{Status: mkStatusMap(search.RepoStatusSearched | search.RepoStatusIndexed)}}
 }
 
 func zoektResultCountFactor(numRepos int, fileMatchLimit int32, globalSearch bool) (k int) {
@@ -631,6 +631,38 @@ func zoektFileMatchToLineMatches(maxLineFragmentMatches int, file *zoekt.FileMat
 	return lines, matchCount
 }
 
+func escape(s string) string {
+	isSpecial := func(c rune) bool {
+		switch c {
+		case '\\', '/':
+			return true
+		default:
+			return false
+		}
+	}
+
+	// Avoid extra work by counting additions. regexp.QuoteMeta does the same,
+	// but is more efficient since it does it via bytes.
+	count := 0
+	for _, c := range s {
+		if isSpecial(c) {
+			count++
+		}
+	}
+	if count == 0 {
+		return string(s)
+	}
+
+	escaped := make([]rune, 0, len(s)+count)
+	for _, c := range s {
+		if isSpecial(c) {
+			escaped = append(escaped, '\\')
+		}
+		escaped = append(escaped, c)
+	}
+	return string(escaped)
+}
+
 func zoektFileMatchToSymbolResults(repo *RepositoryResolver, inputRev string, file *zoekt.FileMatch) []*searchSymbolResult {
 	// Symbol search returns a resolver so we need to pass in some
 	// extra stuff. This is a sign that we can probably restructure
@@ -662,6 +694,11 @@ func zoektFileMatchToSymbolResults(repo *RepositoryResolver, inputRev string, fi
 					ParentKind: m.SymbolInfo.ParentKind,
 					Path:       file.FileName,
 					Line:       l.LineNumber,
+					// symbolRange requires a Pattern /^...$/ containing the line of the symbol to compute the symbol's offsets.
+					// This Pattern is directly accessible on the unindexed code path. But on the indexed code path, we need to
+					// populate it, or we will always compute a 0 offset, which messes up API use (e.g., highlighting).
+					// It must escape `/` or `\` in the line.
+					Pattern: fmt.Sprintf("/^%s$/", escape(string(l.Line))),
 				},
 				lang:    lang,
 				baseURI: baseURI,
