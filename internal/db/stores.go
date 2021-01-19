@@ -1,16 +1,16 @@
 package db
 
 var (
-	AccessTokens     = &accessTokens{}
+	AccessTokens     = &AccessTokenStore{}
 	ExternalServices = &ExternalServiceStore{}
-	DefaultRepos     = &defaultRepos{}
+	DefaultRepos     = &DefaultRepoStore{}
 	Repos            = &RepoStore{}
-	Phabricator      = &phabricator{}
-	QueryRunnerState = &queryRunnerState{}
+	Phabricator      = &PhabricatorStore{}
+	QueryRunnerState = &QueryRunnerStateStore{}
 	Namespaces       = &namespaces{}
-	Orgs             = &orgs{}
+	Orgs             = &OrgStore{}
 	OrgMembers       = &orgMembers{}
-	SavedSearches    = &savedSearches{}
+	SavedSearches    = &SavedSearchStore{}
 	Settings         = &settings{}
 	Users            = &UserStore{}
 	UserCredentials  = &userCredentials{}
