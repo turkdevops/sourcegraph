@@ -5,7 +5,7 @@ import (
 
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/campaigns/store"
 	"github.com/sourcegraph/sourcegraph/internal/campaigns"
-	"github.com/sourcegraph/sourcegraph/internal/db"
+	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 )
 
@@ -58,7 +58,7 @@ func (r *ChangesetRewirer) Rewire() (changesets []*campaigns.Changeset, err erro
 		// would require a new spec.
 		repo := m.Repo
 		if repo == nil {
-			return nil, &db.RepoNotFoundErr{ID: m.RepoID}
+			return nil, &database.RepoNotFoundErr{ID: m.RepoID}
 		}
 
 		if err := checkRepoSupported(repo); err != nil {
@@ -146,7 +146,7 @@ func (r *ChangesetRewirer) attachTrackingChangeset(changeset *campaigns.Changese
 	changeset.Campaigns = append(changeset.Campaigns, campaigns.CampaignAssoc{CampaignID: r.campaignID})
 
 	// If it's errored and not created by another campaign, we re-enqueue it.
-	if changeset.OwnedByCampaignID == 0 && changeset.ReconcilerState == campaigns.ReconcilerStateErrored {
+	if changeset.OwnedByCampaignID == 0 && (changeset.ReconcilerState == campaigns.ReconcilerStateErrored || changeset.ReconcilerState == campaigns.ReconcilerStateFailed) {
 		changeset.ResetQueued()
 	}
 }

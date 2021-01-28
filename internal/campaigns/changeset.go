@@ -234,13 +234,14 @@ type Changeset struct {
 	PublicationState ChangesetPublicationState // "unpublished", "published"
 
 	// All of the following fields are used by workerutil.Worker.
-	ReconcilerState ReconcilerState
-	FailureMessage  *string
-	StartedAt       time.Time
-	FinishedAt      time.Time
-	ProcessAfter    time.Time
-	NumResets       int64
-	NumFailures     int64
+	ReconcilerState  ReconcilerState
+	FailureMessage   *string
+	StartedAt        time.Time
+	FinishedAt       time.Time
+	ProcessAfter     time.Time
+	NumResets        int64
+	NumFailures      int64
+	SyncErrorMessage *string
 
 	// Closing is set to true (along with the ReocncilerState) when the
 	// reconciler should close the changeset.
@@ -342,6 +343,46 @@ func (c *Changeset) Title() (string, error) {
 		return m.Title, nil
 	case *gitlab.MergeRequest:
 		return m.Title, nil
+	default:
+		return "", errors.New("unknown changeset type")
+	}
+}
+
+// AuthorName of the Changeset.
+func (c *Changeset) AuthorName() (string, error) {
+	switch m := c.Metadata.(type) {
+	case *github.PullRequest:
+		return m.Author.Login, nil
+	case *bitbucketserver.PullRequest:
+		if m.Author.User == nil {
+			return "", nil
+		}
+		return m.Author.User.Name, nil
+	case *gitlab.MergeRequest:
+		return m.Author.Username, nil
+	default:
+		return "", errors.New("unknown changeset type")
+	}
+}
+
+// AuthorEmail of the Changeset.
+func (c *Changeset) AuthorEmail() (string, error) {
+	switch m := c.Metadata.(type) {
+	case *github.PullRequest:
+		// For GitHub we can't get the email of the actor without
+		// expanding the token scope by `user:email`. Since the email
+		// is only a nice-to-have for mapping the GitHub user against
+		// a Sourcegraph user, we wait until there is a bigger reason
+		// to have users reconfigure token scopes. Once we ask users for
+		// that scope as well, we should return it here.
+		return "", nil
+	case *bitbucketserver.PullRequest:
+		if m.Author.User == nil {
+			return "", nil
+		}
+		return m.Author.User.EmailAddress, nil
+	case *gitlab.MergeRequest:
+		return m.Author.Email, nil
 	default:
 		return "", errors.New("unknown changeset type")
 	}
@@ -640,6 +681,8 @@ func (c *Changeset) ResetQueued() {
 	c.NumResets = 0
 	c.NumFailures = 0
 	c.FailureMessage = nil
+	// The reconciler syncs where needed, so we reset this message.
+	c.SyncErrorMessage = nil
 }
 
 // Changesets is a slice of *Changesets.
@@ -705,7 +748,7 @@ func WithExternalID(id string) func(*Changeset) bool {
 
 // ChangesetsStats holds stats information on a list of changesets.
 type ChangesetsStats struct {
-	Unpublished, Draft, Open, Merged, Closed, Deleted, Total int32
+	Retrying, Failed, Processing, Unpublished, Draft, Open, Merged, Closed, Deleted, Total int32
 }
 
 // ChangesetEventKindFor returns the ChangesetEventKind for the given

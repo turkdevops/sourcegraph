@@ -9,7 +9,7 @@ import (
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/campaigns/store"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/campaigns/syncer"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
-	ossDB "github.com/sourcegraph/sourcegraph/internal/db"
+	ossDB "github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/goroutine"
 	"github.com/sourcegraph/sourcegraph/internal/httpcli"
 	"github.com/sourcegraph/sourcegraph/internal/timeutil"
@@ -27,8 +27,8 @@ func InitBackgroundJobs(
 ) {
 	cstore := store.NewWithClock(db, timeutil.Now)
 
-	repoStore := ossDB.NewRepoStoreWith(cstore)
-	esStore := ossDB.NewExternalServicesStoreWith(cstore)
+	repoStore := ossDB.ReposWith(cstore)
+	esStore := ossDB.ExternalServicesWith(cstore)
 
 	// We use an internal actor so that we can freely load dependencies from
 	// the database without repository permissions being enforced.

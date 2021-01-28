@@ -25,7 +25,8 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/cloneurls"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
-	"github.com/sourcegraph/sourcegraph/internal/db"
+	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbutil"
 	"github.com/sourcegraph/sourcegraph/internal/errcode"
 	"github.com/sourcegraph/sourcegraph/internal/httpcli"
 	"github.com/sourcegraph/sourcegraph/internal/repos"
@@ -339,11 +340,13 @@ func prometheusGraphQLRequestName(requestName string) string {
 	return "other"
 }
 
-func NewSchema(campaigns CampaignsResolver, codeIntel CodeIntelResolver, authz AuthzResolver, codeMonitors CodeMonitorsResolver, license LicenseResolver) (*graphql.Schema, error) {
+func NewSchema(db dbutil.DB, campaigns CampaignsResolver, codeIntel CodeIntelResolver, insights InsightsResolver, authz AuthzResolver, codeMonitors CodeMonitorsResolver, license LicenseResolver) (*graphql.Schema, error) {
 	resolver := &schemaResolver{
+		db:                db,
 		CampaignsResolver: defaultCampaignsResolver{},
 		AuthzResolver:     defaultAuthzResolver{},
 		CodeIntelResolver: defaultCodeIntelResolver{},
+		InsightsResolver:  defaultInsightsResolver{},
 		LicenseResolver:   defaultLicenseResolver{},
 	}
 	if campaigns != nil {
@@ -353,6 +356,10 @@ func NewSchema(campaigns CampaignsResolver, codeIntel CodeIntelResolver, authz A
 	if codeIntel != nil {
 		EnterpriseResolvers.codeIntelResolver = codeIntel
 		resolver.CodeIntelResolver = codeIntel
+	}
+	if insights != nil {
+		EnterpriseResolvers.insightsResolver = insights
+		resolver.InsightsResolver = insights
 	}
 	if authz != nil {
 		EnterpriseResolvers.authzResolver = authz
@@ -558,14 +565,18 @@ type schemaResolver struct {
 	CampaignsResolver
 	AuthzResolver
 	CodeIntelResolver
+	InsightsResolver
 	CodeMonitorsResolver
 	LicenseResolver
+
+	db dbutil.DB
 }
 
 // EnterpriseResolvers holds the instances of resolvers which are enabled only
 // in enterprise mode. These resolver instances are nil when running as OSS.
 var EnterpriseResolvers = struct {
 	codeIntelResolver    CodeIntelResolver
+	insightsResolver     InsightsResolver
 	authzResolver        AuthzResolver
 	campaignsResolver    CampaignsResolver
 	codeMonitorsResolver CodeMonitorsResolver
@@ -740,7 +751,7 @@ func (r *schemaResolver) PhabricatorRepo(ctx context.Context, args *struct {
 		args.URI = args.Name
 	}
 
-	repo, err := db.Phabricator.GetByName(ctx, api.RepoName(*args.URI))
+	repo, err := database.GlobalPhabricator.GetByName(ctx, api.RepoName(*args.URI))
 	if err != nil {
 		return nil, err
 	}
@@ -801,13 +812,13 @@ func (r *codeHostRepositoryConnectionResolver) Nodes(ctx context.Context) ([]*co
 		)
 		// get all external services for user, or for the specified external service
 		if r.codeHost == 0 {
-			svcs, err = db.ExternalServices.List(ctx, db.ExternalServicesListOptions{NamespaceUserID: r.userID})
+			svcs, err = database.GlobalExternalServices.List(ctx, database.ExternalServicesListOptions{NamespaceUserID: r.userID})
 			if err != nil {
 				r.err = err
 				return
 			}
 		} else {
-			svc, err := db.ExternalServices.GetByID(ctx, r.codeHost)
+			svc, err := database.GlobalExternalServices.GetByID(ctx, r.codeHost)
 			if err != nil {
 				r.err = err
 				return
@@ -853,6 +864,14 @@ func (r *codeHostRepositoryConnectionResolver) Nodes(ctx context.Context) ([]*co
 			// signal the collector to finish
 			close(results)
 		}()
+
+		// are we allowed to show the user private repos?
+		allowPrivate, err := allowPrivate(ctx, r.userID)
+		if err != nil {
+			r.err = err
+			return
+		}
+
 		// collect all results
 		r.nodes = []*codeHostRepositoryResolver{}
 		for repos := range results {
@@ -861,15 +880,14 @@ func (r *codeHostRepositoryConnectionResolver) Nodes(ctx context.Context) ([]*co
 				if r.query != "" && !strings.Contains(strings.ToLower(repo.Name), r.query) {
 					continue
 				}
+				if !allowPrivate && repo.Private {
+					continue
+				}
 				r.nodes = append(r.nodes, &codeHostRepositoryResolver{
 					codeHost: svcsByID[repo.CodeHostID],
 					repo:     &repo,
 				})
 			}
-		}
-		if err != nil {
-			r.err = err
-			return
 		}
 		sort.Slice(r.nodes, func(i, j int) bool {
 			return r.nodes[i].repo.Name < r.nodes[j].repo.Name
@@ -895,4 +913,11 @@ func (r *codeHostRepositoryResolver) CodeHost(ctx context.Context) *externalServ
 	return &externalServiceResolver{
 		externalService: r.codeHost,
 	}
+}
+
+func allowPrivate(ctx context.Context, userID int32) (bool, error) {
+	if conf.ExternalServiceUserMode() == conf.ExternalServiceModeAll {
+		return true, nil
+	}
+	return database.GlobalUsers.HasTag(ctx, userID, database.TagAllowUserExternalServicePrivate)
 }

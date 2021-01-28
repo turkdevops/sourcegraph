@@ -13,9 +13,9 @@ import (
 	ct "github.com/sourcegraph/sourcegraph/enterprise/internal/campaigns/testing"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/campaigns"
-	"github.com/sourcegraph/sourcegraph/internal/db"
-	"github.com/sourcegraph/sourcegraph/internal/db/dbconn"
-	"github.com/sourcegraph/sourcegraph/internal/db/dbtesting"
+	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbconn"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbtesting"
 	"github.com/sourcegraph/sourcegraph/internal/timeutil"
 )
 
@@ -677,7 +677,7 @@ func TestServiceApplyCampaign(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error, but got none")
 			}
-			notFoundErr, ok := err.(*db.RepoNotFoundErr)
+			notFoundErr, ok := err.(*database.RepoNotFoundErr)
 			if !ok {
 				t.Fatalf("expected RepoNotFoundErr but got: %s", err)
 			}
@@ -955,7 +955,7 @@ func TestServiceApplyCampaign(t *testing.T) {
 				// Now we update the changeset to simulate that closing failed.
 				ct.SetChangesetFailed(t, ctx, store, c)
 				assertions.Closing = true
-				assertions.ReconcilerState = campaigns.ReconcilerStateErrored
+				assertions.ReconcilerState = campaigns.ReconcilerStateFailed
 				assertions.ExternalState = campaigns.ChangesetExternalStateOpen
 
 				// Side-effects of ct.setChangesetFailed.

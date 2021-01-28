@@ -103,22 +103,15 @@ func searchSymbols(ctx context.Context, args *search.TextParameters, limit int) 
 		run = parallel.NewRun(conf.SearchSymbolsParallelism())
 		mu  sync.Mutex
 
-		unflattened       [][]*FileMatchResolver
-		flattenedSize     int
+		aggMatches        []*FileMatchResolver
 		overLimitCanceled bool
 	)
 
 	addMatches := func(matches []*FileMatchResolver) {
 		if len(matches) > 0 {
-			sort.Slice(matches, func(i, j int) bool {
-				a, b := matches[i].uri, matches[j].uri
-				return a > b
-			})
-			unflattened = append(unflattened, matches)
-			flattenedSize += len(matches)
-
-			if flattenedSize > int(args.PatternInfo.FileMatchLimit) {
-				tr.LazyPrintf("cancel due to result size: %d > %d", flattenedSize, args.PatternInfo.FileMatchLimit)
+			aggMatches = append(aggMatches, matches...)
+			if len(aggMatches) > int(args.PatternInfo.FileMatchLimit) {
+				tr.LazyPrintf("cancel due to result size: %d > %d", len(aggMatches), args.PatternInfo.FileMatchLimit)
 				overLimitCanceled = true
 				common.IsLimitHit = true
 				cancelAll()
@@ -135,14 +128,19 @@ func searchSymbols(ctx context.Context, args *search.TextParameters, limit int) 
 			func() {
 				mu.Lock()
 				defer mu.Unlock()
-				common.Update(&event.common)
-				tr.LogFields(otlog.Object("searchErr", event.err), otlog.Error(err), otlog.Bool("overLimitCanceled", overLimitCanceled))
-				if event.err != nil && err == nil && !overLimitCanceled {
-					err = event.err
+				common.Update(&event.Stats)
+				tr.LogFields(otlog.Object("searchErr", event.Error), otlog.Error(err), otlog.Bool("overLimitCanceled", overLimitCanceled))
+				if event.Error != nil && err == nil && !overLimitCanceled {
+					err = event.Error
 					tr.LazyPrintf("cancel indexed symbol search due to error: %v", err)
 					cancel()
+
 				}
-				addMatches(event.results)
+				fms := make([]*FileMatchResolver, 0, len(event.Results))
+				for _, match := range event.Results {
+					fms = append(fms, match.(*FileMatchResolver))
+				}
+				addMatches(fms)
 			}()
 		}
 
@@ -179,8 +177,14 @@ func searchSymbols(ctx context.Context, args *search.TextParameters, limit int) 
 		})
 	}
 	err = run.Wait()
-	flattened := flattenFileMatches(unflattened, int(args.PatternInfo.FileMatchLimit))
-	res2 := limitSymbolResults(flattened, limit)
+	sort.Slice(aggMatches, func(i, j int) bool {
+		a, b := aggMatches[i].uri, aggMatches[j].uri
+		return a < b
+	})
+	if limit := int(args.PatternInfo.FileMatchLimit); limit < len(aggMatches) {
+		aggMatches = aggMatches[:limit]
+	}
+	res2 := limitSymbolResults(aggMatches, limit)
 	common.IsLimitHit = symbolCount(res2) < symbolCount(res)
 	return res2, common, err
 }
@@ -275,13 +279,16 @@ func searchSymbolsInRepo(ctx context.Context, repoRevs *search.RepositoryRevisio
 			fileMatch.symbols = append(fileMatch.symbols, symbolRes)
 		} else {
 			fileMatch := &FileMatchResolver{
-				JPath:   symbolRes.symbol.Path,
-				symbols: []*searchSymbolResult{symbolRes},
-				uri:     uri,
-				Repo:    repoResolver,
-				// Don't get commit from GitCommitResolver.OID() because we don't want to
-				// slow search results down when they are coming from zoekt.
-				CommitID: api.CommitID(symbolRes.commit.oid),
+				FileMatch: FileMatch{
+					JPath:   symbolRes.symbol.Path,
+					symbols: []*searchSymbolResult{symbolRes},
+					uri:     uri,
+					Repo:    repoRevs.Repo,
+					// Don't get commit from GitCommitResolver.OID() because we don't want to
+					// slow search results down when they are coming from zoekt.
+					CommitID: api.CommitID(symbolRes.commit.oid),
+				},
+				RepoResolver: repoResolver,
 			}
 			fileMatchesByURI[uri] = fileMatch
 			fileMatches = append(fileMatches, fileMatch)

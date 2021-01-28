@@ -27,6 +27,10 @@ type TestChangesetOpts struct {
 	ExternalReviewState campaigns.ChangesetReviewState
 	ExternalCheckState  campaigns.ChangesetCheckState
 
+	DiffStatAdded   int32
+	DiffStatChanged int32
+	DiffStatDeleted int32
+
 	PublicationState campaigns.ChangesetPublicationState
 
 	ReconcilerState campaigns.ReconcilerState
@@ -102,6 +106,12 @@ func BuildChangeset(opts TestChangesetOpts) *campaigns.Changeset {
 		changeset.Campaigns = []campaigns.CampaignAssoc{{CampaignID: opts.Campaign}}
 	}
 
+	if opts.DiffStatAdded > 0 || opts.DiffStatChanged > 0 || opts.DiffStatDeleted > 0 {
+		changeset.DiffStatAdded = &opts.DiffStatAdded
+		changeset.DiffStatChanged = &opts.DiffStatChanged
+		changeset.DiffStatDeleted = &opts.DiffStatDeleted
+	}
+
 	return changeset
 }
 
@@ -122,6 +132,7 @@ type ChangesetAssertions struct {
 	Body  string
 
 	FailureMessage *string
+	NumResets      int64
 	NumFailures    int64
 
 	DetachFrom []int64
@@ -208,6 +219,10 @@ func AssertChangeset(t *testing.T, c *campaigns.Changeset, a ChangesetAssertions
 		t.Fatalf("changeset NumFailures wrong. want=%d, have=%d", want, have)
 	}
 
+	if have, want := c.NumResets, a.NumResets; have != want {
+		t.Fatalf("changeset NumResets wrong. want=%d, have=%d", want, have)
+	}
+
 	if have, want := c.ExternalBranch, a.ExternalBranch; have != want {
 		t.Fatalf("changeset ExternalBranch wrong. want=%s, have=%s", want, have)
 	}
@@ -275,7 +290,7 @@ var FailedChangesetFailureMessage = "Failed test"
 func SetChangesetFailed(t *testing.T, ctx context.Context, s UpdateChangeseter, c *campaigns.Changeset) {
 	t.Helper()
 
-	c.ReconcilerState = campaigns.ReconcilerStateErrored
+	c.ReconcilerState = campaigns.ReconcilerStateFailed
 	c.FailureMessage = &FailedChangesetFailureMessage
 	c.NumFailures = 5
 

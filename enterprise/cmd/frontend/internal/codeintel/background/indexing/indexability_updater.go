@@ -17,7 +17,6 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/goroutine"
 	"github.com/sourcegraph/sourcegraph/internal/observation"
-	"github.com/sourcegraph/sourcegraph/internal/trace/ot"
 )
 
 const MaxGitserverRequestsPerSecond = 20
@@ -115,9 +114,6 @@ func (u *IndexabilityUpdater) HandleError(err error) {
 }
 
 func (u *IndexabilityUpdater) queueRepository(ctx context.Context, repoUsageStatistics store.RepoUsageStatistics) (err error) {
-	// Enable tracing on the context and trace the operation
-	ctx = ot.WithShouldTrace(ctx, true)
-
 	ctx, traceLog, endObservation := u.operations.QueueRepository.WithAndLogger(ctx, &err, observation.Args{
 		LogFields: []log.Field{
 			log.Int("repositoryID", repoUsageStatistics.RepositoryID),
@@ -141,9 +137,11 @@ func (u *IndexabilityUpdater) queueRepository(ctx context.Context, repoUsageStat
 	}
 	traceLog(log.Int("numPaths", len(paths)))
 
+	gitserverClient := inference.NewGitserverClientShim(repoUsageStatistics.RepositoryID, commit, u.gitserverClient)
+
 	matched := false
 	for name, handler := range inference.Recognizers {
-		matched = handler.CanIndex(paths)
+		matched = handler.CanIndex(paths, gitserverClient)
 		traceLog(log.Bool(fmt.Sprintf("%s.CanIndex", name), matched))
 
 		if matched {
