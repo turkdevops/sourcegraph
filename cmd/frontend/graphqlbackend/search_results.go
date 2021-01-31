@@ -676,16 +676,11 @@ func (r *searchResolver) evaluateAndStream(ctx context.Context, scopeParameters 
 	if r.resultChannel == nil {
 		return r.evaluateAnd(ctx, scopeParameters, operands)
 	}
-	// For streaming search we want to run the evaluation of AND expressions in batch
-	// mode. We copy r to r2 and replace the result channel with a sink.
+	// For streaming search we rely on batch evaluation of
+	// results. Implementing true streaming on AND expressions will require
+	// support in backends (eg directly using Zoekt) or ANDing per repo.
 	r2 := *r
-	sink := make(chan SearchEvent)
-	defer close(sink)
-	go func() {
-		for range sink {
-		}
-	}()
-	r2.resultChannel = sink
+	r2.resultChannel = nil
 
 	result, err := r2.evaluateAnd(ctx, scopeParameters, operands)
 	r.resultChannel <- SearchEvent{
@@ -1499,7 +1494,7 @@ func newAggregator(ctx context.Context, stream SearchStream, inputs *SearchInput
 			}
 
 			agg.alert.Update(event)
-			agg.common.Update(&event.Stats)
+			agg.stats.Update(&event.Stats)
 			if stream != nil {
 				stream <- event
 			}
@@ -1515,7 +1510,7 @@ type aggregator struct {
 	done chan struct{}
 
 	results []SearchResultResolver
-	common  streaming.Stats
+	stats   streaming.Stats
 	alert   alertObserver
 }
 
@@ -1526,8 +1521,8 @@ func (a *aggregator) get() ([]SearchResultResolver, streaming.Stats, *searchAler
 	close(a.stream)
 	<-a.done
 
-	alert, err := a.alert.Done(&a.common)
-	return a.results, a.common, alert, err
+	alert, err := a.alert.Done(&a.stats)
+	return a.results, a.stats, alert, err
 }
 
 func (a *aggregator) send(event SearchEvent) {
