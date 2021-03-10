@@ -2,7 +2,8 @@
 import { Observable, fromEvent, Subscription, OperatorFunction, pipe, Subscriber, Notification } from 'rxjs'
 import { defaultIfEmpty, map, materialize, scan } from 'rxjs/operators'
 import * as GQL from '../../../shared/src/graphql/schema'
-import { asError, isErrorLike } from '../../../shared/src/util/errors'
+import { appendContextFilter } from '../../../shared/src/search/query/transformer'
+import { asError, ErrorLike, isErrorLike } from '../../../shared/src/util/errors'
 import { SearchPatternType } from '../graphql-operations'
 
 // This is an initial proof of concept implementation of search streaming.
@@ -15,7 +16,7 @@ export type SearchEvent =
     | { type: 'progress'; data: Progress }
     | { type: 'filters'; data: Filter[] }
     | { type: 'alert'; data: Alert }
-    | { type: 'error'; data: Error }
+    | { type: 'error'; data: ErrorLike }
     | { type: 'done'; data: {} }
 
 type Match = FileMatch | RepositoryMatch | CommitMatch | FileSymbolMatch
@@ -35,8 +36,12 @@ interface LineMatch {
     offsetAndLengths: number[][]
 }
 
-interface FileSymbolMatch extends Omit<FileMatch, 'lineMatches' | 'type'> {
+interface FileSymbolMatch {
     type: 'symbol'
+    name: string
+    repository: string
+    branches?: string[]
+    version?: string
     symbols: SymbolMatch[]
 }
 
@@ -66,7 +71,11 @@ interface CommitMatch {
     ranges: number[][]
 }
 
-type RepositoryMatch = { type: 'repo' } & Pick<FileMatch, 'repository' | 'branches'>
+export interface RepositoryMatch {
+    type: 'repo'
+    repository: string
+    branches?: string[]
+}
 
 /**
  * An aggregate type representing a progress update.
@@ -170,10 +179,10 @@ function toGQLFileMatchBase(fileMatch: FileMatch | FileSymbolMatch): GQL.IFileMa
     if (fileMatch.branches) {
         const branch = fileMatch.branches[0]
         if (branch !== '') {
-            revision = '@' + branch
+            revision = branch
         }
     } else if (fileMatch.version) {
-        revision = '@' + fileMatch.version
+        revision = fileMatch.version
     }
 
     // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
@@ -181,7 +190,7 @@ function toGQLFileMatchBase(fileMatch: FileMatch | FileSymbolMatch): GQL.IFileMa
         path: fileMatch.name,
         // /github.com/gorilla/mux@v1.7.2/-/blob/mux_test.go
         // TODO return in response?
-        url: '/' + fileMatch.repository + revision + '/-/blob/' + fileMatch.name,
+        url: `/${fileMatch.repository}${revision ? '@' + revision : ''}/-/blob/${fileMatch.name}`,
         commit: {
             oid: fileMatch.version || '',
         },
@@ -191,11 +200,20 @@ function toGQLFileMatchBase(fileMatch: FileMatch | FileSymbolMatch): GQL.IFileMa
         repository: fileMatch.repository,
         branches: fileMatch.branches,
     })
+
+    const revisionSpec = revision
+        ? ({
+              __typename: 'GitRef',
+              displayName: revision,
+              url: '/' + fileMatch.repository + '@' + revision,
+          } as GQL.IGitRef)
+        : null
+
     return {
         __typename: 'FileMatch',
         file,
         repository,
-        revSpec: null,
+        revSpec: revisionSpec,
         resource: fileMatch.name,
         symbols: [],
         lineMatches: [],
@@ -228,18 +246,19 @@ const toMarkdown = (text: string | MarkdownText): GQL.IMarkdown => ({ __typename
 const repoIcon =
     'data:image/svg+xml;base64,PHN2ZyB2ZXJzaW9uPSIxLjEiIGlkPSJMYXllcl8xIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIiB4PSIwcHgiIHk9IjBweCIKCSB2aWV3Qm94PSIwIDAgNjQgNjQiIHN0eWxlPSJlbmFibGUtYmFja2dyb3VuZDpuZXcgMCAwIDY0IDY0OyIgeG1sOnNwYWNlPSJwcmVzZXJ2ZSI+Cjx0aXRsZT5JY29ucyA0MDA8L3RpdGxlPgo8Zz4KCTxwYXRoIGQ9Ik0yMywyMi40YzEuMywwLDIuNC0xLjEsMi40LTIuNHMtMS4xLTIuNC0yLjQtMi40Yy0xLjMsMC0yLjQsMS4xLTIuNCwyLjRTMjEuNywyMi40LDIzLDIyLjR6Ii8+Cgk8cGF0aCBkPSJNMzUsMjYuNGMxLjMsMCwyLjQtMS4xLDIuNC0yLjRzLTEuMS0yLjQtMi40LTIuNHMtMi40LDEuMS0yLjQsMi40UzMzLjcsMjYuNCwzNSwyNi40eiIvPgoJPHBhdGggZD0iTTIzLDQyLjRjMS4zLDAsMi40LTEuMSwyLjQtMi40cy0xLjEtMi40LTIuNC0yLjRzLTIuNCwxLjEtMi40LDIuNFMyMS43LDQyLjQsMjMsNDIuNHoiLz4KCTxwYXRoIGQ9Ik01MCwxNmgtMS41Yy0wLjMsMC0wLjUsMC4yLTAuNSwwLjV2MzVjMCwwLjMtMC4yLDAuNS0wLjUsMC41aC0yN2MtMC41LDAtMS0wLjItMS40LTAuNmwtMC42LTAuNmMtMC4xLTAuMS0wLjEtMC4yLTAuMS0wLjQKCQljMC0wLjMsMC4yLTAuNSwwLjUtMC41SDQ0YzEuMSwwLDItMC45LDItMlYxMmMwLTEuMS0wLjktMi0yLTJIMTRjLTEuMSwwLTIsMC45LTIsMnYzNi4zYzAsMS4xLDAuNCwyLjEsMS4yLDIuOGwzLjEsMy4xCgkJYzEuMSwxLjEsMi43LDEuOCw0LjIsMS44SDUwYzEuMSwwLDItMC45LDItMlYxOEM1MiwxNi45LDUxLjEsMTYsNTAsMTZ6IE0xOSwyMGMwLTIuMiwxLjgtNCw0LTRjMS40LDAsMi44LDAuOCwzLjUsMgoJCWMxLjEsMS45LDAuNCw0LjMtMS41LDUuNFYzM2MxLTAuNiwyLjMtMC45LDQtMC45YzEsMCwyLTAuNSwyLjgtMS4zQzMyLjUsMzAsMzMsMjkuMSwzMywyOHYtMC42Yy0xLjItMC43LTItMi0yLTMuNQoJCWMwLTIuMiwxLjgtNCw0LTRjMi4yLDAsNCwxLjgsNCw0YzAsMS41LTAuOCwyLjctMiwzLjVoMGMtMC4xLDIuMS0wLjksNC40LTIuNSw2Yy0xLjYsMS42LTMuNCwyLjQtNS41LDIuNWMtMC44LDAtMS40LDAuMS0xLjksMC4zCgkJYy0wLjIsMC4xLTEsMC44LTEuMiwwLjlDMjYuNiwzOCwyNywzOC45LDI3LDQwYzAsMi4yLTEuOCw0LTQsNHMtNC0xLjgtNC00YzAtMS41LDAuOC0yLjcsMi0zLjRWMjMuNEMxOS44LDIyLjcsMTksMjEuNCwxOSwyMHoiLz4KPC9nPgo8L3N2Zz4K'
 
-function toGQLRepositoryMatch(repo: RepositoryMatch): GQL.IRepository {
+export function toGQLRepositoryMatch(repo: RepositoryMatch): GQL.IRepository {
     const branch = repo?.branches?.[0]
     const revision = branch ? `@${branch}` : ''
     const label = repo.repository + revision
+    const url = encodeURI(label)
 
     // We only need to return the subset defined in IGenericSearchResultInterface
     const gqlRepo: unknown = {
         __typename: 'Repository',
         icon: repoIcon,
-        label: toMarkdown(`[${label}](/${label})`),
-        url: '/' + label,
-        detail: toMarkdown('Repository name match'),
+        label: toMarkdown(`[${label}](${url})`),
+        url: '/' + url,
+        detail: toMarkdown('Repository match'),
         matches: [],
         name: repo.repository,
     }
@@ -432,7 +451,16 @@ const messageHandlers: {
             eventSource.close()
         }),
     error: (type, eventSource, observer) =>
-        fromEvent(eventSource, type).subscribe(error => {
+        fromEvent(eventSource, type).subscribe(event => {
+            let error: ErrorLike | null = null
+            if (event instanceof MessageEvent) {
+                try {
+                    error = JSON.parse(event.data) as ErrorLike
+                } catch {
+                    error = null
+                }
+            }
+
             if (isErrorLike(error)) {
                 observer.error(error)
             } else {
@@ -459,6 +487,7 @@ export interface StreamSearchOptions {
     patternType: SearchPatternType
     caseSensitive: boolean
     versionContext: string | undefined
+    searchContextSpec: string | undefined
     trace: string | undefined
 }
 
@@ -474,11 +503,14 @@ function search({
     patternType,
     caseSensitive,
     versionContext,
+    searchContextSpec,
     trace,
 }: StreamSearchOptions): Observable<SearchEvent> {
     return new Observable<SearchEvent>(observer => {
+        const finalQuery = appendContextFilter(`${query} ${caseSensitive ? 'case:yes' : ''}`, searchContextSpec)
+
         const parameters = [
-            ['q', caseSensitive ? `${query} case:yes` : query],
+            ['q', finalQuery],
             ['v', version],
             ['t', patternType as string],
         ]

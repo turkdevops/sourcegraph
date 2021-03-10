@@ -14,6 +14,7 @@ import (
 	searchrepos "github.com/sourcegraph/sourcegraph/cmd/frontend/internal/search/repos"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbtesting"
 	"github.com/sourcegraph/sourcegraph/internal/search"
 	"github.com/sourcegraph/sourcegraph/internal/search/streaming"
 	"github.com/sourcegraph/sourcegraph/internal/types"
@@ -22,11 +23,13 @@ import (
 )
 
 func TestSearchSuggestions(t *testing.T) {
+	db := new(dbtesting.MockDB)
+
 	limitOffset := &database.LimitOffset{Limit: searchrepos.SearchLimits().MaxRepos + 1}
 
 	getSuggestions := func(t *testing.T, query, version string) []string {
 		t.Helper()
-		r, err := (&schemaResolver{}).Search(context.Background(), &SearchArgs{Query: query, Version: version})
+		r, err := (&schemaResolver{db: db}).Search(context.Background(), &SearchArgs{Query: query, Version: version})
 		if err != nil {
 			t.Fatal("Search:", err)
 		}
@@ -109,8 +112,8 @@ func TestSearchSuggestions(t *testing.T) {
 			if want := "foo"; args.PatternInfo.Pattern != want {
 				t.Errorf("got %q, want %q", args.PatternInfo.Pattern, want)
 			}
-			fm := mkFileMatch(&types.RepoName{Name: "repo"}, "dir/file")
-			fm.uri = "git://repo?rev#dir/file"
+			fm := mkFileMatch(db, &types.RepoName{Name: "repo"}, "dir/file")
+			fm.URI = "git://repo?rev#dir/file"
 			fm.CommitID = "rev"
 			return []*FileMatchResolver{fm}, &streaming.Stats{}, nil
 		}
@@ -169,8 +172,8 @@ func TestSearchSuggestions(t *testing.T) {
 				t.Errorf("got %q, want %q", args.PatternInfo.Pattern, `"foo" or "."`)
 			}
 			mk := func(name api.RepoName, path string) *FileMatchResolver {
-				fm := mkFileMatch(&types.RepoName{Name: name}, path)
-				fm.uri = fileMatchURI(name, "rev", path)
+				fm := mkFileMatch(db, &types.RepoName{Name: name}, path)
+				fm.URI = fileMatchURI(name, "rev", path)
 				fm.CommitID = "rev"
 				return fm
 			}
@@ -237,7 +240,7 @@ func TestSearchSuggestions(t *testing.T) {
 		defer func() { database.Mocks.Repos.ListRepoNames = nil }()
 
 		// Mock to bypass language suggestions.
-		mockShowLangSuggestions = func() ([]*searchSuggestionResolver, error) { return nil, nil }
+		mockShowLangSuggestions = func() ([]SearchSuggestionResolver, error) { return nil, nil }
 		defer func() { mockShowLangSuggestions = nil }()
 
 		calledSearchFilesInRepos := atomic.NewBool(false)
@@ -253,7 +256,7 @@ func TestSearchSuggestions(t *testing.T) {
 				t.Errorf("got %q, want %q", repos, want)
 			}
 			return []*FileMatchResolver{
-				mkFileMatch(&types.RepoName{Name: "foo-repo"}, "dir/file"),
+				mkFileMatch(db, &types.RepoName{Name: "foo-repo"}, "dir/file"),
 			}, &streaming.Stats{}, nil
 		}
 		defer func() { mockSearchFilesInRepos = nil }()
@@ -319,11 +322,11 @@ func TestSearchSuggestions(t *testing.T) {
 		defer func() { backend.Mocks.Repos.GetInventory = nil }()
 
 		// Mock to bypass other suggestions.
-		mockShowRepoSuggestions = func() ([]*searchSuggestionResolver, error) { return nil, nil }
+		mockShowRepoSuggestions = func() ([]SearchSuggestionResolver, error) { return nil, nil }
 		defer func() { mockShowRepoSuggestions = nil }()
-		mockShowFileSuggestions = func() ([]*searchSuggestionResolver, error) { return nil, nil }
+		mockShowFileSuggestions = func() ([]SearchSuggestionResolver, error) { return nil, nil }
 		defer func() { mockShowFileSuggestions = nil }()
-		mockShowSymbolMatches = func() ([]*searchSuggestionResolver, error) { return nil, nil }
+		mockShowSymbolMatches = func() ([]SearchSuggestionResolver, error) { return nil, nil }
 		defer func() { mockShowSymbolMatches = nil }()
 
 		for _, v := range searchVersions {
@@ -358,7 +361,7 @@ func TestSearchSuggestions(t *testing.T) {
 		defer func() { database.Mocks.Repos.ListRepoNames = nil }()
 
 		// Mock to bypass language suggestions.
-		mockShowLangSuggestions = func() ([]*searchSuggestionResolver, error) { return nil, nil }
+		mockShowLangSuggestions = func() ([]SearchSuggestionResolver, error) { return nil, nil }
 		defer func() { mockShowLangSuggestions = nil }()
 
 		calledSearchFilesInRepos := atomic.NewBool(false)
@@ -374,7 +377,7 @@ func TestSearchSuggestions(t *testing.T) {
 				t.Errorf("got %q, want %q", repos, want)
 			}
 			return []*FileMatchResolver{
-				mkFileMatch(&types.RepoName{Name: "foo-repo"}, "dir/bar-file"),
+				mkFileMatch(db, &types.RepoName{Name: "foo-repo"}, "dir/bar-file"),
 			}, &streaming.Stats{}, nil
 		}
 		defer func() { mockSearchFilesInRepos = nil }()

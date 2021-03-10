@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbtesting"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbutil"
 	"github.com/sourcegraph/sourcegraph/schema"
 )
 
@@ -18,7 +20,7 @@ func TestServeStream_empty(t *testing.T) {
 	mock.Close()
 
 	ts := httptest.NewServer(&streamHandler{
-		newSearchResolver: func(context.Context, *graphqlbackend.SearchArgs) (searchResolver, error) {
+		newSearchResolver: func(context.Context, dbutil.DB, *graphqlbackend.SearchArgs) (searchResolver, error) {
 			return mock, nil
 		}})
 	defer ts.Close()
@@ -42,7 +44,9 @@ func TestServeStream_empty(t *testing.T) {
 
 // Ensures graphqlbackend matches the interface we expect
 func TestDefaultNewSearchResolver(t *testing.T) {
-	_, err := defaultNewSearchResolver(context.Background(), &graphqlbackend.SearchArgs{
+	db := new(dbtesting.MockDB)
+
+	_, err := defaultNewSearchResolver(context.Background(), db, &graphqlbackend.SearchArgs{
 		Version:  "V2",
 		Settings: &schema.Settings{},
 	})
@@ -53,7 +57,7 @@ func TestDefaultNewSearchResolver(t *testing.T) {
 
 type mockSearchResolver struct {
 	done chan struct{}
-	c    graphqlbackend.SearchStream
+	c    graphqlbackend.Sender
 }
 
 func (h *mockSearchResolver) Results(ctx context.Context) (*graphqlbackend.SearchResultsResolver, error) {
@@ -66,12 +70,9 @@ func (h *mockSearchResolver) Results(ctx context.Context) (*graphqlbackend.Searc
 		}, nil
 	}
 }
-func (h *mockSearchResolver) SetStream(c graphqlbackend.SearchStream) {
-	h.c = c
-}
 
 func (h *mockSearchResolver) Send(r []graphqlbackend.SearchResultResolver) {
-	h.c <- graphqlbackend.SearchEvent{Results: r}
+	h.c.Send(graphqlbackend.SearchEvent{Results: r})
 }
 
 func (h *mockSearchResolver) Close() {

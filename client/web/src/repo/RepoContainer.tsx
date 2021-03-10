@@ -24,7 +24,7 @@ import {
     PatternTypeProps,
     CaseSensitivityProps,
     CopyQueryButtonProps,
-    quoteIfNeeded,
+    SearchContextProps,
 } from '../search'
 import { RouteDescriptor } from '../util/contributions'
 import { parseBrowserRepoURL } from '../util/url'
@@ -58,6 +58,7 @@ import { IS_CHROME } from '../marketing/util'
 import { useLocalStorage } from '../util/useLocalStorage'
 import { Settings } from '../schema/settings.schema'
 import SourceRepositoryIcon from 'mdi-react/SourceRepositoryIcon'
+import { escapeSpaces } from '../../../shared/src/search/query/filters'
 
 /**
  * Props passed to sub-routes of {@link RepoContainer}.
@@ -75,6 +76,7 @@ export interface RepoContainerContext
         CaseSensitivityProps,
         CopyQueryButtonProps,
         VersionContextProps,
+        Pick<SearchContextProps, 'selectedSearchContextSpec'>,
         BreadcrumbSetters {
     repo: RepositoryFields
     authenticatedUser: AuthenticatedUser | null
@@ -109,6 +111,7 @@ interface RepoContainerProps
         CaseSensitivityProps,
         CopyQueryButtonProps,
         VersionContextProps,
+        Pick<SearchContextProps, 'selectedSearchContextSpec'>,
         BreadcrumbSetters,
         BreadcrumbsProps {
     repoContainerRoutes: readonly RepoContainerRoute[]
@@ -263,7 +266,7 @@ export const RepoContainer: React.FunctionComponent<RepoContainerProps> = props 
     useEffect(() => {
         let query = searchQueryForRepoRevision(repoName, globbing, revision)
         if (filePath) {
-            query = `${query.trimEnd()} file:${quoteIfNeeded(globbing ? filePath : '^' + escapeRegExp(filePath))}`
+            query = `${query.trimEnd()} file:${escapeSpaces(globbing ? filePath : '^' + escapeRegExp(filePath))}`
         }
         onNavbarQueryChange({
             query,
@@ -331,13 +334,7 @@ export const RepoContainer: React.FunctionComponent<RepoContainerProps> = props 
         if (isRepoNotFoundErrorLike(repoOrError)) {
             return <RepositoryNotFoundPage repo={repoName} viewerCanAdminister={viewerCanAdminister} />
         }
-        return (
-            <HeroPage
-                icon={AlertCircleIcon}
-                title="Error"
-                subtitle={<ErrorMessage error={repoOrError} history={props.history} />}
-            />
-        )
+        return <HeroPage icon={AlertCircleIcon} title="Error" subtitle={<ErrorMessage error={repoOrError} />} />
     }
 
     const repoMatchURL = '/' + encodeURIPathComponent(repoName)

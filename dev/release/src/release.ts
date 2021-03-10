@@ -32,7 +32,7 @@ export type StepID =
     | 'release:status'
     | 'release:create-candidate'
     | 'release:stage'
-    | 'release:add-to-campaign'
+    | 'release:add-to-batch-change'
     | 'release:finalize'
     | 'release:close'
     // util
@@ -343,6 +343,10 @@ cc @${config.captainGitHubUsername}
                             `find . -type f -name '*.md' ! -name 'CHANGELOG.md' -exec ${sed} -i -E 's/sourcegraph\\/server:${versionRegex}/sourcegraph\\/server:${release.version}/g' {} +`,
                             `${sed} -i -E 's/version \`${versionRegex}\`/version \`${release.version}\`/g' doc/index.md`,
                             `${sed} -i -E 's/SOURCEGRAPH_VERSION="v${versionRegex}"/SOURCEGRAPH_VERSION="v${release.version}"/g' doc/admin/install/docker-compose/index.md`,
+                            `${sed} -i -E "s/DEPLOY_SOURCEGRAPH_DOCKER_FORK_REVISION='v${versionRegex}'/DEPLOY_SOURCEGRAPH_DOCKER_FORK_REVISION='v${release.version}'/g" doc/admin/install/docker-compose/aws.md`,
+                            `${sed} -i -E "s/DEPLOY_SOURCEGRAPH_DOCKER_FORK_REVISION='v${versionRegex}'/DEPLOY_SOURCEGRAPH_DOCKER_FORK_REVISION='v${release.version}'/g" doc/admin/install/docker-compose/digitalocean.md`,
+                            `${sed} -i -E "s/DEPLOY_SOURCEGRAPH_DOCKER_FORK_REVISION='v${versionRegex}'/DEPLOY_SOURCEGRAPH_DOCKER_FORK_REVISION='v${release.version}'/g" doc/admin/install/docker-compose/google_cloud.md`,
+
                             notPatchRelease
                                 ? `comby -in-place '{{$previousReleaseRevspec := ":[1]"}} {{$previousReleaseVersion := ":[2]"}} {{$currentReleaseRevspec := ":[3]"}} {{$currentReleaseVersion := ":[4]"}}' '{{$previousReleaseRevspec := ":[3]"}} {{$previousReleaseVersion := ":[4]"}} {{$currentReleaseRevspec := "v${release.version}"}} {{$currentReleaseVersion := "${release.major}.${release.minor}"}}' doc/_resources/templates/document.html`
                                 : `comby -in-place 'currentReleaseRevspec := ":[1]"' 'currentReleaseRevspec := "v${release.version}"' doc/_resources/templates/document.html`,
@@ -353,7 +357,7 @@ cc @${config.captainGitHubUsername}
                             `comby -in-place 'latestReleaseDockerComposeOrPureDocker = newBuild(":[1]")' "latestReleaseDockerComposeOrPureDocker = newBuild(\\"${release.version}\\")" cmd/frontend/internal/app/updatecheck/handler.go`,
 
                             // Support current release as the "previous release" going forward
-                            `comby -in-place 'env["MINIMUM_UPGRADEABLE_VERSION"] = ":[1]"' 'env["MINIMUM_UPGRADEABLE_VERSION"] = "${release.version}"' enterprise/dev/ci/ci/*.go`,
+                            `comby -in-place 'env["MINIMUM_UPGRADEABLE_VERSION"] = ":[1]"' 'env["MINIMUM_UPGRADEABLE_VERSION"] = "${release.version}"' enterprise/dev/ci/internal/ci/*.go`,
 
                             // Add a stub to add upgrade guide entries
                             notPatchRelease
@@ -467,10 +471,10 @@ Campaign: ${campaignURL}`,
         },
     },
     {
-        id: 'release:add-to-campaign',
-        description: 'Manually add a change to a release campaign',
+        id: 'release:add-to-batch-change',
+        description: 'Manually add a change to a release batch change',
         argNames: ['changeRepo', 'changeID'],
-        // Example: yarn run release release:add-to-campaign sourcegraph/about 1797
+        // Example: yarn run release release:add-to-batch-change sourcegraph/about 1797
         run: async (config, changeRepo, changeID) => {
             const { upcoming: release } = await releaseVersions(config)
             if (!changeRepo || !changeID) {

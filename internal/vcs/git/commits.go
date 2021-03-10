@@ -25,9 +25,31 @@ type Commit struct {
 	ID        api.CommitID `json:"ID,omitempty"`
 	Author    Signature    `json:"Author"`
 	Committer *Signature   `json:"Committer,omitempty"`
-	Message   string       `json:"Message,omitempty"`
+	Message   Message      `json:"Message,omitempty"`
 	// Parents are the commit IDs of this commit's parent commits.
 	Parents []api.CommitID `json:"Parents,omitempty"`
+}
+
+type Message string
+
+// Subject returns the first line of the commit message
+func (m Message) Subject() string {
+	message := string(m)
+	i := strings.Index(message, "\n")
+	if i == -1 {
+		return strings.TrimSpace(message)
+	}
+	return strings.TrimSpace(message[:i])
+}
+
+// Body returns the contents of the Git commit message after the subject.
+func (m Message) Body() string {
+	message := string(m)
+	i := strings.Index(message, "\n")
+	if i == -1 {
+		return ""
+	}
+	return strings.TrimSpace(message[i:])
 }
 
 type Signature struct {
@@ -47,6 +69,10 @@ type CommitsOptions struct {
 
 	Author string // include only commits whose author matches this
 	After  string // include only commits after this date
+	Before string // include only commits before this date
+
+	Reverse   bool // Whether or not commits should be given in reverse order (optional)
+	DateOrder bool // Whether or not commits should be sorted by date (optional)
 
 	Path string // only commits modifying the given path are selected (optional)
 
@@ -237,6 +263,15 @@ func commitLogArgs(initialArgs []string, opt CommitsOptions) (args []string, err
 	if opt.After != "" {
 		args = append(args, "--after="+opt.After)
 	}
+	if opt.Before != "" {
+		args = append(args, "--before="+opt.Before)
+	}
+	if opt.Reverse {
+		args = append(args, "--reverse")
+	}
+	if opt.DateOrder {
+		args = append(args, "--date-order")
+	}
 
 	if opt.MessageQuery != "" {
 		args = append(args, "--fixed-strings", "--regexp-ignore-case", "--grep="+opt.MessageQuery)
@@ -276,6 +311,93 @@ func CommitCount(ctx context.Context, repo api.RepoName, opt CommitsOptions) (ui
 	out = bytes.TrimSpace(out)
 	n, err := strconv.ParseUint(string(out), 10, 64)
 	return uint(n), err
+}
+
+// FirstEverCommit returns the first commit ever made to the repository.
+func FirstEverCommit(ctx context.Context, repo api.RepoName) (*Commit, error) {
+	span, ctx := ot.StartSpanFromContext(ctx, "Git: FirstEverCommit")
+	defer span.Finish()
+
+	args := []string{"rev-list", "--max-count=1", "--max-parents=0", "HEAD"}
+	cmd := gitserver.DefaultClient.Command("git", args...)
+	cmd.Repo = repo
+	out, err := cmd.CombinedOutput(ctx)
+	if err != nil {
+		return nil, errors.WithMessage(err, fmt.Sprintf("git command %v failed (output: %q)", args, out))
+	}
+	id := api.CommitID(bytes.TrimSpace(out))
+	return GetCommit(ctx, repo, id, ResolveRevisionOptions{NoEnsureRevision: true})
+}
+
+// FindNearestCommit finds the commit in the given repository revSpec (e.g. `HEAD` or `mybranch`)
+// whose author date most closely matches the target time.
+//
+// Can return a commit very far away if no nearby one exists.
+// Can theoretically return nil, nil if no commits at all are found.
+func FindNearestCommit(ctx context.Context, repoName api.RepoName, revSpec string, target time.Time) (*Commit, error) {
+	if revSpec == "" {
+		revSpec = "HEAD"
+	}
+	// Resolve e.g. the branch we're looking at.
+	branchCommit, err := ResolveRevision(ctx, repoName, revSpec, ResolveRevisionOptions{NoEnsureRevision: true})
+	if err != nil {
+		return nil, err
+	}
+
+	// Find the next closest commit on or after our target time.
+	commitsAfter, err := Commits(ctx, repoName, CommitsOptions{
+		After:     target.Add(-1 * time.Second).Format(time.RFC3339),
+		Range:     string(branchCommit),
+		Reverse:   true,
+		DateOrder: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var commitOnOrAfter *Commit
+	if len(commitsAfter) > 0 {
+		commitOnOrAfter = commitsAfter[0]
+	}
+
+	// Find the next closest commit before our target time.
+	commitsBefore, err := Commits(ctx, repoName, CommitsOptions{
+		N:         1,
+		Before:    target.Format(time.RFC3339),
+		Range:     string(branchCommit),
+		DateOrder: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var commitBefore *Commit
+	if len(commitsBefore) > 0 {
+		commitBefore = commitsBefore[0]
+	}
+
+	switch {
+	case commitOnOrAfter == nil && commitBefore == nil:
+		return nil, nil
+	case commitOnOrAfter == nil:
+		return commitBefore, nil
+	case commitBefore == nil:
+		return commitOnOrAfter, nil
+	default:
+		// Get absolute distance of each commit to target.
+		distanceToAfter := commitOnOrAfter.Author.Date.Sub(target)
+		if distanceToAfter < 0 {
+			distanceToAfter = -distanceToAfter
+		}
+		distanceToBefore := commitBefore.Author.Date.Sub(target)
+		if distanceToBefore < 0 {
+			distanceToBefore = -distanceToBefore
+		}
+
+		// Return whichever commit is closer.
+		if distanceToAfter < distanceToBefore {
+			return commitOnOrAfter, nil
+		}
+		return commitBefore, nil
+	}
 }
 
 const (
@@ -328,7 +450,7 @@ func parseCommitFromLog(data []byte) (commit *Commit, refs []string, rest []byte
 		ID:        commitID,
 		Author:    Signature{Name: string(parts[2]), Email: string(parts[3]), Date: time.Unix(authorTime, 0).UTC()},
 		Committer: &Signature{Name: string(parts[5]), Email: string(parts[6]), Date: time.Unix(committerTime, 0).UTC()},
-		Message:   string(bytes.TrimSuffix(parts[8], []byte{'\n'})),
+		Message:   Message(strings.TrimSuffix(string(parts[8]), "\n")),
 		Parents:   parents,
 	}
 
@@ -442,7 +564,7 @@ func logOnelineBatchScanner(scan func() (*onelineCommit, error), maxBatchSize in
 
 // logOnelineScanner parses the commits from the reader of:
 //
-//   git log --oneline -z --source --no-patch
+//   git log --pretty='format:%H %S' -z --source --no-patch
 //
 // Once it returns an error the scanner should be disregarded. io.EOF is
 // returned when there is no more data to read.
@@ -493,16 +615,15 @@ func logOnelineScanner(r io.Reader) func() (*onelineCommit, error) {
 
 		e := scanner.Bytes()
 
-		// Format: (40-char SHA) \t (source ref)? 'log size '
-		if len(e) <= 40 {
+		// Format: (40-char SHA) (source ref)
+		if len(e) <= 42 {
 			return nil, fmt.Errorf("parsing git oneline commit: short entry: %q", e)
 		}
 		sha1 := e[:40]
-		i := bytes.Index(e, []byte{' '})
-		if i == -1 {
+		if e[40] != ' ' {
 			return nil, fmt.Errorf("parsing git oneline commit: no ' ': %q", e)
 		}
-		sourceRef := e[41:i]
+		sourceRef := e[41:]
 		return &onelineCommit{
 			sha1:      string(sha1),
 			sourceRef: string(sourceRef),

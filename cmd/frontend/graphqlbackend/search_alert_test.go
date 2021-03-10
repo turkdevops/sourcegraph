@@ -14,6 +14,7 @@ import (
 
 	searchrepos "github.com/sourcegraph/sourcegraph/cmd/frontend/internal/search/repos"
 	"github.com/sourcegraph/sourcegraph/internal/api"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbtesting"
 	"github.com/sourcegraph/sourcegraph/internal/search"
 	"github.com/sourcegraph/sourcegraph/internal/search/query"
 	"github.com/sourcegraph/sourcegraph/internal/types"
@@ -21,6 +22,8 @@ import (
 )
 
 func TestSearchPatternForSuggestion(t *testing.T) {
+	db := new(dbtesting.MockDB)
+
 	cases := []struct {
 		Name  string
 		Alert searchAlert
@@ -29,6 +32,7 @@ func TestSearchPatternForSuggestion(t *testing.T) {
 		{
 			Name: "with_regex_suggestion",
 			Alert: searchAlert{
+				db:          db,
 				title:       "An alert for regex",
 				description: "An alert for regex",
 				proposedQueries: []*searchQueryDescription{
@@ -44,6 +48,7 @@ func TestSearchPatternForSuggestion(t *testing.T) {
 		{
 			Name: "with_structural_suggestion",
 			Alert: searchAlert{
+				db:          db,
 				title:       "An alert for structural",
 				description: "An alert for structural",
 				proposedQueries: []*searchQueryDescription{
@@ -85,70 +90,70 @@ func TestAddQueryRegexpField(t *testing.T) {
 			query:      "foo",
 			addField:   "repo",
 			addPattern: "p",
-			want:       "foo repo:p",
+			want:       "repo:p foo",
+		},
+		{
+			query:      "foo repo:p",
+			addField:   "repo",
+			addPattern: "p",
+			want:       "repo:p foo",
 		},
 		{
 			query:      "foo repo:q",
 			addField:   "repo",
 			addPattern: "p",
-			want:       "foo repo:q repo:p",
-		},
-		{
-			query:      "foo repo:p",
-			addField:   "repo",
-			addPattern: "p",
-			want:       "foo repo:p",
+			want:       "repo:q repo:p foo",
 		},
 		{
 			query:      "foo repo:p",
 			addField:   "repo",
 			addPattern: "pp",
-			want:       "foo repo:pp",
+			want:       "repo:pp foo",
 		},
 		{
 			query:      "foo repo:p",
 			addField:   "repo",
 			addPattern: "^p",
-			want:       "foo repo:^p",
+			want:       "repo:^p foo",
 		},
 		{
 			query:      "foo repo:p",
 			addField:   "repo",
 			addPattern: "p$",
-			want:       "foo repo:p$",
+			want:       "repo:p$ foo",
 		},
 		{
 			query:      "foo repo:^p",
 			addField:   "repo",
 			addPattern: "^pq",
-			want:       "foo repo:^pq",
+			want:       "repo:^pq foo",
 		},
 		{
 			query:      "foo repo:p$",
 			addField:   "repo",
 			addPattern: "qp$",
-			want:       "foo repo:qp$",
+			want:       "repo:qp$ foo",
 		},
 		{
 			query:      "foo repo:^p",
 			addField:   "repo",
 			addPattern: "x$",
-			want:       "foo repo:^p repo:x$",
+			want:       "repo:^p repo:x$ foo",
 		},
 		{
 			query:      "foo repo:p|q",
 			addField:   "repo",
 			addPattern: "pq",
-			want:       "foo repo:p|q repo:pq",
+			want:       "repo:p|q repo:pq foo",
 		},
 	}
 	for _, test := range tests {
 		t.Run(fmt.Sprintf("%s, add %s:%s", test.query, test.addField, test.addPattern), func(t *testing.T) {
-			parseTree, err := query.Parse(test.query)
+			q, err := query.ParseLiteral(test.query)
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := query.AddRegexpField(parseTree, test.addField, test.addPattern)
+			got := query.AddRegexpField(q, test.addField, test.addPattern)
 			if got != test.want {
 				t.Errorf("got %q, want %q", got, test.want)
 			}
@@ -157,6 +162,8 @@ func TestAddQueryRegexpField(t *testing.T) {
 }
 
 func TestAlertForDiffCommitSearchLimits(t *testing.T) {
+	db := new(dbtesting.MockDB)
+
 	cases := []struct {
 		name                 string
 		multiErr             *multierror.Error
@@ -165,22 +172,22 @@ func TestAlertForDiffCommitSearchLimits(t *testing.T) {
 		{
 			name:                 "diff_search_warns_on_repos_greater_than_search_limit",
 			multiErr:             multierror.Append(&multierror.Error{}, &RepoLimitError{ResultType: "diff", Max: 50}),
-			wantAlertDescription: `Diff search can currently only handle searching over 50 repositories at a time. Try using the "repo:" filter to narrow down which repositories to search, or using 'after:"1 week ago"'. Tracking issue: https://github.com/sourcegraph/sourcegraph/issues/6826`,
+			wantAlertDescription: `Diff search can currently only handle searching across 50 repositories at a time. Try using the "repo:" filter to narrow down which repositories to search, or using 'after:"1 week ago"'.`,
 		},
 		{
 			name:                 "commit_search_warns_on_repos_greater_than_search_limit",
 			multiErr:             multierror.Append(&multierror.Error{}, &RepoLimitError{ResultType: "commit", Max: 50}),
-			wantAlertDescription: `Commit search can currently only handle searching over 50 repositories at a time. Try using the "repo:" filter to narrow down which repositories to search, or using 'after:"1 week ago"'. Tracking issue: https://github.com/sourcegraph/sourcegraph/issues/6826`,
+			wantAlertDescription: `Commit search can currently only handle searching across 50 repositories at a time. Try using the "repo:" filter to narrow down which repositories to search, or using 'after:"1 week ago"'.`,
 		},
 		{
 			name:                 "commit_search_warns_on_repos_greater_than_search_limit_with_time_filter",
 			multiErr:             multierror.Append(&multierror.Error{}, &TimeLimitError{ResultType: "commit", Max: 10000}),
-			wantAlertDescription: `Commit search can currently only handle searching over 10000 repositories at a time. Try using the "repo:" filter to narrow down which repositories to search. Tracking issue: https://github.com/sourcegraph/sourcegraph/issues/6826`,
+			wantAlertDescription: `Commit search can currently only handle searching across 10000 repositories at a time. Try using the "repo:" filter to narrow down which repositories to search.`,
 		},
 	}
 
 	for _, test := range cases {
-		alert := alertForError(test.multiErr, &SearchInputs{})
+		alert := alertForError(db, test.multiErr, &SearchInputs{})
 		haveAlertDescription := alert.description
 		if diff := cmp.Diff(test.wantAlertDescription, haveAlertDescription); diff != "" {
 			t.Fatalf("test %s, mismatched alert (-want, +got):\n%s", test.name, diff)
@@ -189,6 +196,8 @@ func TestAlertForDiffCommitSearchLimits(t *testing.T) {
 }
 
 func TestErrorToAlertStructuralSearch(t *testing.T) {
+	db := new(dbtesting.MockDB)
+
 	cases := []struct {
 		name           string
 		errors         []error
@@ -214,7 +223,7 @@ func TestErrorToAlertStructuralSearch(t *testing.T) {
 			Errors:      test.errors,
 			ErrorFormat: multierror.ListFormatFunc,
 		}
-		haveAlert := alertForError(multiErr, &SearchInputs{})
+		haveAlert := alertForError(db, multiErr, &SearchInputs{})
 
 		if haveAlert != nil && haveAlert.title != test.wantAlertTitle {
 			t.Fatalf("test %s, have alert: %q, want: %q", test.name, haveAlert.title, test.wantAlertTitle)
@@ -224,6 +233,7 @@ func TestErrorToAlertStructuralSearch(t *testing.T) {
 }
 
 func TestAlertForOverRepoLimit(t *testing.T) {
+	db := new(dbtesting.MockDB)
 
 	generateRepoRevs := func(numRepos int) []*search.RepositoryRevisions {
 		repoRevs := make([]*search.RepositoryRevisions, numRepos)
@@ -272,6 +282,7 @@ func TestAlertForOverRepoLimit(t *testing.T) {
 			repoRevs:      0,
 			query:         "foo",
 			wantAlert: &searchAlert{
+				db:              db,
 				prometheusType:  "over_repo_limit",
 				title:           "Too many matching repositories",
 				proposedQueries: nil,
@@ -284,12 +295,13 @@ func TestAlertForOverRepoLimit(t *testing.T) {
 			repoRevs:      1,
 			query:         "foo",
 			wantAlert: &searchAlert{
+				db:             db,
 				prometheusType: "over_repo_limit",
 				title:          "Too many matching repositories",
 				proposedQueries: []*searchQueryDescription{
 					{
 						"in the repository a/repoName0",
-						"foo repo:^a/repoName0$",
+						"repo:^a/repoName0$ foo",
 						query.SearchType(0),
 					},
 				},
@@ -303,6 +315,20 @@ func TestAlertForOverRepoLimit(t *testing.T) {
 			repoRevs:      1,
 			query:         "foo",
 			wantAlert: &searchAlert{
+				db:              db,
+				prometheusType:  "over_repo_limit",
+				title:           "Too many matching repositories",
+				proposedQueries: nil,
+				description:     "Use a 'repo:' or 'repogroup:' filter to narrow your search and see results.",
+			},
+		},
+		{
+			name:          "this query is not basic, so return a default alert without suggestions",
+			cancelContext: false,
+			repoRevs:      1,
+			query:         "a or (b and c)",
+			wantAlert: &searchAlert{
+				db:              db,
 				prometheusType:  "over_repo_limit",
 				title:           "Too many matching repositories",
 				proposedQueries: nil,
@@ -315,12 +341,13 @@ func TestAlertForOverRepoLimit(t *testing.T) {
 			repoRevs:      1,
 			query:         "foo",
 			wantAlert: &searchAlert{
+				db:             db,
 				prometheusType: "over_repo_limit",
 				title:          "Too many matching repositories",
 				proposedQueries: []*searchQueryDescription{
 					{
 						"in repositories under a (further filtering required)",
-						"foo repo:^a/",
+						"repo:^a/ foo",
 						query.SearchType(0),
 					},
 				},
@@ -331,13 +358,15 @@ func TestAlertForOverRepoLimit(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			setMockResolveRepositories(test.repoRevs)
-			q, err := query.ProcessAndOr(test.query, query.ParserOptions{SearchType: query.SearchType(0), Globbing: test.globbing})
+			q, err := query.Parse(test.query, query.ParserOptions{SearchType: query.SearchType(0), Globbing: test.globbing})
 			if err != nil {
 				t.Fatal(err)
 			}
 			sr := searchResolver{
+				db: db,
 				SearchInputs: &SearchInputs{
-					Query: q,
+					OriginalQuery: test.query,
+					Query:         q,
 					UserSettings: &schema.Settings{
 						SearchGlobbing: &test.globbing,
 					}},
@@ -374,5 +403,50 @@ func TestCapFirst(t *testing.T) {
 				t.Errorf("makeTitle() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAlertForNoResolvedReposWithNonGlobalSearchContext(t *testing.T) {
+	db := new(dbtesting.MockDB)
+
+	mockResolveRepositories = func(effectiveRepoFieldValues []string) (resolved searchrepos.Resolved, err error) {
+		return searchrepos.Resolved{
+			RepoRevs:        []*search.RepositoryRevisions{},
+			MissingRepoRevs: make([]*search.RepositoryRevisions, 0),
+			OverLimit:       false,
+		}, nil
+	}
+	defer func() {
+		mockResolveRepositories = nil
+	}()
+
+	searchQuery := "context:@user repo:r1 foo"
+	wantAlert := &searchAlert{
+		db:             db,
+		prometheusType: "no_resolved_repos__context_none_in_common",
+		title:          "No repositories found for your query within the context @user",
+		proposedQueries: []*searchQueryDescription{{
+			description: "search in the global context",
+			query:       "context:global repo:r1 foo",
+			patternType: query.SearchTypeRegex,
+		}},
+	}
+
+	q, err := query.ParseLiteral(searchQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sr := searchResolver{
+		db: db,
+		SearchInputs: &SearchInputs{
+			OriginalQuery: searchQuery,
+			Query:         q,
+			UserSettings:  &schema.Settings{},
+		},
+	}
+
+	alert := sr.alertForNoResolvedRepos(context.Background())
+	if !reflect.DeepEqual(alert, wantAlert) {
+		t.Fatalf("have alert %+v, want: %+v", alert, wantAlert)
 	}
 }

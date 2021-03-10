@@ -4,9 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	zoektquery "github.com/google/zoekt/query"
-
 	"github.com/google/zoekt"
+	zoektquery "github.com/google/zoekt/query"
 )
 
 // FakeSearcher is a zoekt.Searcher that returns a predefined search Result.
@@ -26,8 +25,8 @@ func (ss *FakeSearcher) Search(ctx context.Context, q zoektquery.Q, opts *zoekt.
 	return ss.Result, nil
 }
 
-func (ss *FakeSearcher) StreamSearch(ctx context.Context, q zoektquery.Q, opts *zoekt.SearchOptions) <-chan StreamSearchEvent {
-	return (&StreamSearchAdapter{ss}).StreamSearch(ctx, q, opts)
+func (ss *FakeSearcher) StreamSearch(ctx context.Context, q zoektquery.Q, opts *zoekt.SearchOptions, z zoekt.Sender) error {
+	return (&StreamSearchAdapter{ss}).StreamSearch(ctx, q, opts, z)
 }
 
 func (ss *FakeSearcher) List(ctx context.Context, q zoektquery.Q) (*zoekt.RepoList, error) {

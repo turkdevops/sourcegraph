@@ -12,14 +12,19 @@ import (
 )
 
 // PeriodicGoroutine represents a goroutine whose main behavior is reinvoked periodically.
+//
+// See
+// https://docs.sourcegraph.com/dev/background-information/backgroundroutine
+// for more information and a step-by-step guide on how to implement a
+// PeriodicBackgroundRoutine.
 type PeriodicGoroutine struct {
 	interval  time.Duration
 	handler   Handler
 	operation *observation.Operation
 	clock     glock.Clock
-	ctx       context.Context // root context passed to the handler
-	cancel    func()          // cancels the root context
-	finished  chan struct{}   // signals that Start has finished
+	ctx       context.Context    // root context passed to the handler
+	cancel    context.CancelFunc // cancels the root context
+	finished  chan struct{}      // signals that Start has finished
 }
 
 var _ BackgroundRoutine = &PeriodicGoroutine{}

@@ -1,3 +1,4 @@
+//nolint:bodyclose // Body is closed in Client.Do, but the response is still returned to provide access to the headers
 package bitbucketserver
 
 import (
@@ -49,7 +50,7 @@ var requestCounter = metrics.NewRequestMeter("bitbucket", "Total number of reque
 // repositories request for every 1000 repositories on Bitbucket every 1m by default, so for someone
 // with 20,000 Bitbucket repositories we need 20,000/1000 requests per minute (1200/hr) + overhead for
 // repository lookup requests by users, and requests for identifying which repositories a user has
-// access to (if authorization is in use) and requests for campaign synchronization if it is in use.
+// access to (if authorization is in use) and requests for changeset synchronization if it is in use.
 //
 // These are our default values, they can be changed in configuration
 const (
@@ -464,6 +465,12 @@ func (c *Client) CreateProject(ctx context.Context, p *Project) error {
 	return err
 }
 
+// ErrPullRequestNotFound is returned by LoadPullRequest when the pull request has
+// been deleted on upstream, or never existed. It will NOT be thrown, if it can't
+// be determined whether the pull request exists, because the credential used
+// cannot view the repository.
+var ErrPullRequestNotFound = errors.New("pull request not found")
+
 // LoadPullRequest loads the given PullRequest returning an error in case of failure.
 func (c *Client) LoadPullRequest(ctx context.Context, pr *PullRequest) error {
 	if pr.ToRef.Repository.Slug == "" {
@@ -480,7 +487,14 @@ func (c *Client) LoadPullRequest(ctx context.Context, pr *PullRequest) error {
 		pr.ID,
 	)
 	_, err := c.send(ctx, "GET", path, nil, nil, pr)
-	return err
+	if err != nil {
+		wrappedErr := errors.Unwrap(err)
+		if e, ok := wrappedErr.(*httpError); ok && e.NoSuchPullRequestException() {
+			return ErrPullRequestNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 type UpdatePullRequestInput struct {
@@ -547,7 +561,7 @@ func (c *Client) CreatePullRequest(ctx context.Context, pr *PullRequest) error {
 	}
 
 	// Bitbucket Server doesn't support GFM taskitems. But since we might add
-	// those to a PR description for certain Automation Campaigns, we have to
+	// those to a PR description for certain batch changes, we have to
 	// "downgrade" here and for now, removing taskitems is enough.
 	description := strings.ReplaceAll(pr.Description, "- [ ] ", "- ")
 
@@ -1278,6 +1292,15 @@ func IsNotFound(err error) bool {
 	return false
 }
 
+// IsUnauthorized reports whether err is a Bitbucket Server API 401 error.
+func IsUnauthorized(err error) bool {
+	switch e := errors.Cause(err).(type) {
+	case *httpError:
+		return e.Unauthorized()
+	}
+	return false
+}
+
 // IsNoSuchLabel reports whether err is a Bitbucket Server API "No Such Label"
 // error.
 func IsNoSuchLabel(err error) bool {
@@ -1329,13 +1352,18 @@ func (e *httpError) DuplicatePullRequest() bool {
 	return strings.Contains(string(e.Body), bitbucketDuplicatePRException)
 }
 
+func (e *httpError) NoSuchPullRequestException() bool {
+	return strings.Contains(string(e.Body), bitbucketNoSuchPullRequestException)
+}
+
 func (e *httpError) NoSuchLabelException() bool {
 	return strings.Contains(string(e.Body), bitbucketNoSuchLabelException)
 }
 
 const (
-	bitbucketDuplicatePRException = "com.atlassian.bitbucket.pull.DuplicatePullRequestException"
-	bitbucketNoSuchLabelException = "com.atlassian.bitbucket.label.NoSuchLabelException"
+	bitbucketDuplicatePRException       = "com.atlassian.bitbucket.pull.DuplicatePullRequestException"
+	bitbucketNoSuchLabelException       = "com.atlassian.bitbucket.label.NoSuchLabelException"
+	bitbucketNoSuchPullRequestException = "com.atlassian.bitbucket.pull.NoSuchPullRequestException"
 )
 
 func (e *httpError) ExtractExistingPullRequest() (*PullRequest, error) {

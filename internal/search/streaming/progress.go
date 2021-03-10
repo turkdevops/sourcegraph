@@ -45,18 +45,32 @@ func (c *Stats) Update(other *Stats) {
 	c.IsLimitHit = c.IsLimitHit || other.IsLimitHit
 	c.IsIndexUnavailable = c.IsIndexUnavailable || other.IsIndexUnavailable
 
-	if c.Repos == nil {
-		c.Repos = other.Repos
-	} else {
-		for id, r := range other.Repos {
-			c.Repos[id] = r
-		}
+	if c.Repos == nil && len(other.Repos) > 0 {
+		c.Repos = make(map[api.RepoID]*types.RepoName, len(other.Repos))
+	}
+	for id, r := range other.Repos {
+		c.Repos[id] = r
 	}
 
 	c.Status.Union(&other.Status)
 
 	c.ExcludedForks = c.ExcludedForks + other.ExcludedForks
 	c.ExcludedArchived = c.ExcludedArchived + other.ExcludedArchived
+}
+
+// Zero returns true if stats is empty. IE calling Update will result in no
+// change.
+func (c *Stats) Zero() bool {
+	if c == nil {
+		return true
+	}
+
+	return !(c.IsLimitHit ||
+		len(c.Repos) > 0 ||
+		c.Status.Len() > 0 ||
+		c.ExcludedForks > 0 ||
+		c.ExcludedArchived > 0 ||
+		c.IsIndexUnavailable)
 }
 
 func (c *Stats) String() string {
@@ -90,6 +104,7 @@ func (c *Stats) String() string {
 	return "Stats{" + strings.Join(parts, " ") + "}"
 }
 
+// Equal provides custom comparison which is used by go-cmp
 func (c *Stats) Equal(other *Stats) bool {
 	return reflect.DeepEqual(c, other)
 }

@@ -158,6 +158,108 @@ func TestRepository_HasCommitAfter(t *testing.T) {
 	}
 }
 
+func TestRepository_FirstEverCommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	testCases := []struct {
+		commitDates []string
+		want        string
+	}{
+		{
+			commitDates: []string{
+				"2006-01-02T15:04:05Z",
+				"2007-01-02T15:04:05Z",
+				"2008-01-02T15:04:05Z",
+			},
+			want: "2006-01-02T15:04:05Z",
+		},
+		{
+			commitDates: []string{
+				"2007-01-02T15:04:05Z", // Don't think this is possible, but if it is we still want the first commit (not strictly "oldest")
+				"2006-01-02T15:04:05Z",
+				"2007-01-02T15:04:06Z",
+			},
+			want: "2007-01-02T15:04:05Z",
+		},
+	}
+	for _, tc := range testCases {
+		gitCommands := make([]string, len(tc.commitDates))
+		for i, date := range tc.commitDates {
+			gitCommands[i] = fmt.Sprintf("GIT_COMMITTER_NAME=a GIT_COMMITTER_EMAIL=a@a.com GIT_COMMITTER_DATE=%s git commit --allow-empty -m foo --author='a <a@a.com>'", date)
+		}
+
+		repo := MakeGitRepository(t, gitCommands...)
+		gotCommit, err := FirstEverCommit(ctx, repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := gotCommit.Committer.Date.Format(time.RFC3339)
+		if got != tc.want {
+			t.Errorf("got %q, want %q", got, tc.want)
+		}
+	}
+}
+
+func TestRepository_FindNearestCommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	commitDates := []string{
+		"2006-01-02T15:04:05Z",
+		"2007-01-02T15:04:05Z",
+		"2008-01-02T15:04:05Z",
+	}
+	testCases := []struct {
+		name   string
+		target time.Time
+		want   string
+	}{
+		{
+			name:   "exactly first commit",
+			target: MustParseTime(time.RFC3339, "2006-01-02T15:04:05Z"),
+			want:   "2006-01-02T15:04:05Z",
+		},
+		{
+			name:   "very far away",
+			target: MustParseTime(time.RFC3339, "2000-01-02T15:04:05Z"),
+			want:   "2006-01-02T15:04:05Z",
+		},
+		{
+			name:   "near second commit",
+			target: MustParseTime(time.RFC3339, "2006-08-02T15:04:05Z"),
+			want:   "2007-01-02T15:04:05Z",
+		},
+		{
+			name:   "exactly third commit",
+			target: MustParseTime(time.RFC3339, "2008-01-02T15:04:05Z"),
+			want:   "2008-01-02T15:04:05Z",
+		},
+		{
+			name:   "past third commit",
+			target: MustParseTime(time.RFC3339, "2008-01-02T20:04:05Z"),
+			want:   "2008-01-02T15:04:05Z",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			gitCommands := make([]string, len(commitDates))
+			for i, date := range commitDates {
+				gitCommands[i] = fmt.Sprintf("GIT_COMMITTER_NAME=a GIT_COMMITTER_EMAIL=a@a.com GIT_COMMITTER_DATE=%s git commit --allow-empty -m foo --date=%s --author='a <a@a.com>'", date, date)
+			}
+
+			repo := MakeGitRepository(t, gitCommands...)
+			gotCommit, err := FindNearestCommit(ctx, repo, "HEAD", tc.target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := gotCommit.Committer.Date.Format(time.RFC3339)
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRepository_Commits(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -285,6 +387,24 @@ func TestRepository_Commits_options(t *testing.T) {
 			},
 			wantCommits: wantGitCommits2,
 			wantTotal:   1,
+		},
+		"before": {
+			repo: MakeGitRepository(t, gitCommands...),
+			opt: CommitsOptions{
+				Before: "2006-01-02T15:04:07Z",
+				Range:  "HEAD",
+				N:      1,
+			},
+			wantCommits: []*Commit{
+				{
+					ID:        "b266c7e3ca00b1a17ad0b1449825d0854225c007",
+					Author:    Signature{Name: "a", Email: "a@a.com", Date: MustParseTime(time.RFC3339, "2006-01-02T15:04:06Z")},
+					Committer: &Signature{Name: "c", Email: "c@c.com", Date: MustParseTime(time.RFC3339, "2006-01-02T15:04:07Z")},
+					Message:   "bar",
+					Parents:   []api.CommitID{"ea167fe3d76b1e5fd3ed8ca44cbd2fe3897684f8"},
+				},
+			},
+			wantTotal: 1,
 		},
 	}
 
@@ -554,4 +674,24 @@ func TestLogOnelineBatchScanner_small(t *testing.T) {
 	if _, err := next(); err != io.EOF {
 		t.Fatal("unexpected error:", err)
 	}
+}
+
+func TestMessage(t *testing.T) {
+	t.Run("Body", func(t *testing.T) {
+		tests := map[Message]string{
+			"hello":                 "",
+			"hello\n":               "",
+			"hello\n\n":             "",
+			"hello\nworld":          "world",
+			"hello\n\nworld":        "world",
+			"hello\n\nworld\nfoo":   "world\nfoo",
+			"hello\n\nworld\nfoo\n": "world\nfoo",
+		}
+		for input, want := range tests {
+			got := input.Body()
+			if got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		}
+	})
 }

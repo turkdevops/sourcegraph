@@ -148,7 +148,7 @@ exports[`StreamingProgressCount should render correctly for big numbers complete
     <Memo(CalculatorIcon)
       className="mr-2 icon-inline"
     />
-    1.2m+
+    1.2m
      
     results
      in
@@ -157,7 +157,49 @@ exports[`StreamingProgressCount should render correctly for big numbers complete
     s
      
     from 
-    8.9k+
+    8.9k
+     
+    repositories
+  </div>
+</StreamingProgressCount>
+`;
+
+exports[`StreamingProgressCount should render correctly for limithit 1`] = `
+<StreamingProgressCount
+  progress={
+    Object {
+      "durationMs": 1250,
+      "matchCount": 123,
+      "repositoriesCount": 500,
+      "skipped": Array [
+        Object {
+          "message": "match limit",
+          "reason": "document-match-limit",
+          "severity": "warn",
+          "title": "match limit",
+        },
+      ],
+    }
+  }
+  state="complete"
+>
+  <div
+    className="streaming-progress__count d-flex align-items-center"
+  >
+    <Memo(CalculatorIcon)
+      className="mr-2 icon-inline"
+    />
+    123
+    +
+     
+    results
+     in
+     
+    1.25
+    s
+     
+    from 
+    500
      
     repositories
   </div>

@@ -29,6 +29,7 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/database"
 	"github.com/sourcegraph/sourcegraph/internal/database/dbconn"
 	"github.com/sourcegraph/sourcegraph/internal/debugserver"
+	"github.com/sourcegraph/sourcegraph/internal/encryption/keyring"
 	"github.com/sourcegraph/sourcegraph/internal/env"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
 	"github.com/sourcegraph/sourcegraph/internal/gitserver"
@@ -91,6 +92,10 @@ func Main(enterpriseInit EnterpriseInit) {
 			log.Fatalf("Detected repository DSN change, restarting to take effect: %q", newDSN)
 		}
 	})
+
+	if err := keyring.Init(ctx); err != nil {
+		log.Fatalf("error initialising encryption keyring: %v", err)
+	}
 
 	db, err := dbconn.New(dsn, "repo-updater")
 	if err != nil {
@@ -412,29 +417,14 @@ func syncScheduler(ctx context.Context, sched scheduler, gitserverClient *gitser
 
 		// Fetch all default repos that are NOT cloned so that we can add them to the
 		// scheduler
-
-		batchSize := 30_000
-		opts := database.ListDefaultReposOptions{
-			Limit:        batchSize,
-			AfterID:      0,
-			OnlyUncloned: true,
+		repos, err := baseRepoStore.ListDefaultRepos(ctx, database.ListDefaultReposOptions{OnlyUncloned: true})
+		if err != nil {
+			log15.Error("Listing default repos", "error", err)
+			return
 		}
 
-		for {
-			batch, err := baseRepoStore.ListDefaultRepos(ctx, opts)
-			if err != nil {
-				log15.Error("Listing default repos", "error", err)
-				return
-			}
-
-			// Ensure that uncloned repos are known to the scheduler
-			sched.EnsureScheduled(batch)
-
-			if len(batch) < batchSize {
-				break
-			}
-			opts.AfterID = int32(batch[len(batch)-1].ID)
-		}
+		// Ensure that uncloned repos are known to the scheduler
+		sched.EnsureScheduled(repos)
 
 		// Ensure that any uncloned repos are moved to the front of the schedule
 		sched.SetCloned(cloned)

@@ -30,7 +30,7 @@ const PROPS: React.ComponentProps<typeof GlobalNavbar> = {
     setCaseSensitivity: () => undefined,
     platformContext: {} as any,
     settingsCascade: NOOP_SETTINGS_CASCADE,
-    showCampaigns: false,
+    showBatchChanges: false,
     telemetryService: {} as any,
     hideNavLinks: true, // used because reactstrap Popover is incompatible with react-test-renderer
     isExtensionAlertAnimating: false,
@@ -40,11 +40,16 @@ const PROPS: React.ComponentProps<typeof GlobalNavbar> = {
     setVersionContext: () => undefined,
     availableVersionContexts: [],
     showSearchContext: false,
+    selectedSearchContextSpec: '',
+    setSelectedSearchContextSpec: () => undefined,
+    availableSearchContexts: [],
+    defaultSearchContextSpec: '',
     variant: 'default',
     globbing: false,
     enableSmartQuery: false,
     showOnboardingTour: false,
     branding: undefined,
+    routes: [],
 }
 
 describe('GlobalNavbar', () => {

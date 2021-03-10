@@ -17,6 +17,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/envvar"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/search/searchcontexts"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/database"
@@ -39,7 +40,15 @@ type Resolved struct {
 	OverLimit       bool
 }
 
-func ResolveRepositories(ctx context.Context, op Options) (Resolved, error) {
+type Resolver struct {
+	Zoekt            *searchbackend.Zoekt
+	DefaultReposFunc defaultReposFunc
+	NamespaceStore   interface {
+		GetByName(context.Context, string) (*database.Namespace, error)
+	}
+}
+
+func (r *Resolver) Resolve(ctx context.Context, op Options) (Resolved, error) {
 	var err error
 	tr, ctx := trace.New(ctx, "resolveRepositories", op.String())
 	defer func() {
@@ -99,11 +108,16 @@ func ResolveRepositories(ctx context.Context, op Options) (Resolved, error) {
 		}
 	}
 
+	searchContext, err := searchcontexts.ResolveSearchContextSpec(ctx, op.SearchContextSpec, r.NamespaceStore.GetByName)
+	if err != nil {
+		return Resolved{}, err
+	}
+
 	var defaultRepos []*types.RepoName
 
-	if envvar.SourcegraphDotComMode() && len(includePatterns) == 0 && !hasTypeRepo(op.Query) {
+	if envvar.SourcegraphDotComMode() && len(includePatterns) == 0 && !query.HasTypeRepo(op.Query) && searchcontexts.IsGlobalSearchContext(searchContext) {
 		start := time.Now()
-		defaultRepos, err = defaultRepositories(ctx, database.GlobalDefaultRepos.List, search.Indexed(), excludePatterns)
+		defaultRepos, err = defaultRepositories(ctx, r.DefaultReposFunc, r.Zoekt, excludePatterns)
 		if err != nil {
 			return Resolved{}, errors.Wrap(err, "getting list of default repos")
 		}
@@ -136,6 +150,10 @@ func ResolveRepositories(ctx context.Context, op Options) (Resolved, error) {
 			OnlyArchived: op.OnlyArchived,
 			NoPrivate:    op.OnlyPublic,
 			OnlyPrivate:  op.OnlyPrivate,
+		}
+
+		if searchContext != nil && searchContext.UserID != 0 {
+			options.UserID = searchContext.UserID
 		}
 
 		// PERF: We Query concurrently since Count and List call can be slow
@@ -262,6 +280,7 @@ type Options struct {
 	RepoFilters        []string
 	MinusRepoFilters   []string
 	RepoGroupFilters   []string
+	SearchContextSpec  string
 	VersionContextName string
 	UserSettings       *schema.Settings
 	NoForks            bool
@@ -271,7 +290,7 @@ type Options struct {
 	CommitAfter        string
 	OnlyPrivate        bool
 	OnlyPublic         bool
-	Query              query.QueryInfo
+	Query              query.Q
 }
 
 func (op *Options) String() string {
@@ -411,7 +430,7 @@ type ExcludedRepos struct {
 
 // computeExcludedRepositories returns a list of excluded repositories (Forks or
 // archives) based on the search Query.
-func computeExcludedRepositories(ctx context.Context, q query.QueryInfo, op database.ReposListOptions) (excluded ExcludedRepos) {
+func computeExcludedRepositories(ctx context.Context, q query.Q, op database.ReposListOptions) (excluded ExcludedRepos) {
 	if q == nil {
 		return ExcludedRepos{}
 	}
@@ -421,9 +440,7 @@ func computeExcludedRepositories(ctx context.Context, q query.QueryInfo, op data
 	var wg sync.WaitGroup
 	var numExcludedForks, numExcludedArchived int
 
-	forkStr, _ := q.StringValue(query.FieldFork)
-	fork := ParseYesNoOnly(forkStr)
-	if fork == Invalid && !ExactlyOneRepo(op.IncludePatterns) {
+	if q.Fork() == nil && !ExactlyOneRepo(op.IncludePatterns) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -440,9 +457,7 @@ func computeExcludedRepositories(ctx context.Context, q query.QueryInfo, op data
 		}()
 	}
 
-	archivedStr, _ := q.StringValue(query.FieldArchived)
-	archived := ParseYesNoOnly(archivedStr)
-	if archived == Invalid && !ExactlyOneRepo(op.IncludePatterns) {
+	if q.Archived() == nil && !ExactlyOneRepo(op.IncludePatterns) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -555,19 +570,6 @@ func findPatternRevs(includePatterns []string) (includePatternRevs []patternRevs
 		}
 	}
 	return
-}
-
-func hasTypeRepo(q query.QueryInfo) bool {
-	fields := q.Fields()
-	if len(fields["type"]) == 0 {
-		return false
-	}
-	for _, t := range fields["type"] {
-		if t.Value() == "repo" {
-			return true
-		}
-	}
-	return false
 }
 
 type defaultReposFunc func(ctx context.Context) ([]*types.RepoName, error)

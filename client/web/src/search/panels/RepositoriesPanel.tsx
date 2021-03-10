@@ -2,8 +2,7 @@ import classNames from 'classnames'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { AuthenticatedUser } from '../../auth'
 import { EventLogResult } from '../backend'
-import { FILTERS } from '../../../../shared/src/search/query/filters'
-import { FilterType } from '../../../../shared/src/search/query/util'
+import { FilterType, FILTERS } from '../../../../shared/src/search/query/filters'
 import { Link } from '../../../../shared/src/components/Link'
 import { LoadingPanelView } from './LoadingPanelView'
 import { Observable } from 'rxjs'
@@ -134,11 +133,8 @@ function processRepositories(eventLogResult: EventLogResult): string[] | null {
                     token.type === 'filter' &&
                     (token.field.value === FilterType.repo || token.field.value === FILTERS[FilterType.repo].alias)
                 ) {
-                    if (token.value?.type === 'literal' && !recentlySearchedRepos.includes(token.value.value)) {
+                    if (token.value && !recentlySearchedRepos.includes(token.value.value)) {
                         recentlySearchedRepos.push(token.value.value)
-                    }
-                    if (token.value?.type === 'quoted' && !recentlySearchedRepos.includes(token.value.quotedValue)) {
-                        recentlySearchedRepos.push(token.value.quotedValue)
                     }
                 }
             }

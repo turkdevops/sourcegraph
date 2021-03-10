@@ -12,9 +12,7 @@ import (
 type RepoStatus uint8
 
 const (
-	RepoStatusSearched RepoStatus = 1 << iota // was searched
-	RepoStatusIndexed                         // searched using an index
-	RepoStatusCloning                         // could not be searched because they were still being cloned
+	RepoStatusCloning  RepoStatus = 1 << iota // could not be searched because they were still being cloned
 	RepoStatusMissing                         // could not be searched because they do not exist
 	RepoStatusLimitHit                        // searched, but have results that were not returned due to exceeded limits
 	RepoStatusTimedout                        // repos that were not searched due to timeout
@@ -24,8 +22,6 @@ var repoStatusName = []struct {
 	status RepoStatus
 	name   string
 }{
-	{RepoStatusSearched, "searched"},
-	{RepoStatusIndexed, "indexed"},
 	{RepoStatusCloning, "cloning"},
 	{RepoStatusMissing, "missing"},
 	{RepoStatusLimitHit, "limithit"},
@@ -99,9 +95,8 @@ func (m *RepoStatusMap) Update(id api.RepoID, status RepoStatus) {
 // Union is a fast path for calling m.Update on all entries in o.
 func (m *RepoStatusMap) Union(o *RepoStatusMap) {
 	m.status |= o.status
-	if m.m == nil {
-		m.m = o.m
-		return
+	if m.m == nil && len(o.m) > 0 {
+		m.m = make(map[api.RepoID]RepoStatus, len(o.m))
 	}
 	for id, status := range o.m {
 		m.m[id] |= status
@@ -147,6 +142,9 @@ func (m *RepoStatusMap) String() string {
 // RepoStatusSingleton is a convenience function to contain a RepoStatusMap
 // with one entry.
 func RepoStatusSingleton(id api.RepoID, status RepoStatus) RepoStatusMap {
+	if status == 0 {
+		return RepoStatusMap{}
+	}
 	return RepoStatusMap{
 		m:      map[api.RepoID]RepoStatus{id: status},
 		status: status,

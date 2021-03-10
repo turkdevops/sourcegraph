@@ -26,7 +26,7 @@ import { memoizeObservable } from '../../../../shared/src/util/memoizeObservable
 import { queryGraphQL } from '../../backend/graphql'
 import { FilteredConnection } from '../../components/FilteredConnection'
 import { PageTitle } from '../../components/PageTitle'
-import { PatternTypeProps, CaseSensitivityProps, CopyQueryButtonProps } from '../../search'
+import { PatternTypeProps, CaseSensitivityProps, CopyQueryButtonProps, SearchContextProps } from '../../search'
 import { basename } from '../../util/path'
 import { fetchTreeEntries } from '../backend'
 import { GitCommitNode, GitCommitNodeProps } from '../commits/GitCommitNode'
@@ -37,7 +37,6 @@ import { subYears, formatISO } from 'date-fns'
 import { pluralize } from '../../../../shared/src/util/strings'
 import { useObservable } from '../../../../shared/src/util/useObservable'
 import { encodeURIPathComponent, toPrettyBlobURL, toURIWithPath } from '../../../../shared/src/util/url'
-import { getViewsForContainer } from '../../../../shared/src/api/client/services/viewService'
 import { Settings } from '../../schema/settings.schema'
 import { ViewGrid } from './ViewGrid'
 import { VersionContextProps } from '../../../../shared/src/search/util'
@@ -49,6 +48,7 @@ import { GitCommitFields, Scalars, TreePageRepositoryFields } from '../../graphq
 import { getFileDecorations } from '../../backend/features'
 import { FileDecorationsByPath } from '../../../../shared/src/api/extension/flatExtensionApi'
 import SettingsIcon from 'mdi-react/SettingsIcon'
+import { getCombinedViews } from '../../insights/backend'
 
 const fetchTreeCommits = memoizeObservable(
     (args: {
@@ -109,6 +109,7 @@ interface Props
         CaseSensitivityProps,
         CopyQueryButtonProps,
         VersionContextProps,
+        Pick<SearchContextProps, 'selectedSearchContextSpec'>,
         BreadcrumbSetters {
     repo: TreePageRepositoryFields
     /** The tree's path in TreePage. We call it filePath for consistency elsewhere. */
@@ -212,13 +213,15 @@ export const TreePage: React.FunctionComponent<Props> = ({
 
     const { services } = props.extensionsController
 
-    const codeInsightsEnabled =
-        !isErrorLike(settingsCascade.final) && !!settingsCascade.final?.experimentalFeatures?.codeInsights
+    const showCodeInsights =
+        !isErrorLike(settingsCascade.final) &&
+        !!settingsCascade.final?.experimentalFeatures?.codeInsights &&
+        settingsCascade.final['insights.displayLocation.directory'] !== false
 
     // Add DirectoryViewer
     const uri = toURIWithPath({ repoName: repo.name, commitID, filePath })
     useEffect(() => {
-        if (!codeInsightsEnabled) {
+        if (!showCodeInsights) {
             return
         }
         const viewerId = services.viewer.addViewer({
@@ -227,15 +230,15 @@ export const TreePage: React.FunctionComponent<Props> = ({
             resource: uri,
         })
         return () => services.viewer.removeViewer(viewerId)
-    }, [services.viewer, services.model, uri, codeInsightsEnabled])
+    }, [services.viewer, services.model, uri, showCodeInsights])
 
     // Observe directory views
     const workspaceUri = services.workspace.roots.value[0]?.uri
     const views = useObservable(
         useMemo(
             () =>
-                codeInsightsEnabled && workspaceUri
-                    ? getViewsForContainer(
+                showCodeInsights && workspaceUri
+                    ? getCombinedViews(
                           ContributableViewContainer.Directory,
                           {
                               viewer: {
@@ -251,7 +254,7 @@ export const TreePage: React.FunctionComponent<Props> = ({
                           services.view
                       )
                     : EMPTY,
-            [codeInsightsEnabled, workspaceUri, uri, services.view]
+            [showCodeInsights, workspaceUri, uri, services.view]
         )
     )
 
@@ -321,7 +324,7 @@ export const TreePage: React.FunctionComponent<Props> = ({
                 /not a directory/i.test(treeOrError.message) ? (
                     <Redirect to={toPrettyBlobURL({ repoName: repo.name, revision, commitID, filePath })} />
                 ) : (
-                    <ErrorAlert error={treeOrError} history={props.history} />
+                    <ErrorAlert error={treeOrError} />
                 )
             ) : (
                 <>

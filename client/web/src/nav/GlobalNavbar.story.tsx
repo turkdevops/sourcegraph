@@ -49,14 +49,19 @@ const defaultProps = (
     copyQueryButton: false,
     versionContext: undefined,
     showSearchContext: false,
+    selectedSearchContextSpec: '',
+    setSelectedSearchContextSpec: () => undefined,
+    availableSearchContexts: [],
+    defaultSearchContextSpec: '',
     showOnboardingTour: false,
     isLightTheme: props.isLightTheme,
     navbarSearchQueryState: { query: '' },
     onNavbarQueryChange: () => {},
     isExtensionAlertAnimating: false,
-    showCampaigns: true,
+    showBatchChanges: true,
     activation: undefined,
     hideNavLinks: false,
+    routes: [],
 })
 
 const { add } = storiesOf('web/nav/GlobalNav', module)

@@ -11,11 +11,14 @@ import (
 
 	"github.com/inconshreveable/log15"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+
 	"github.com/sourcegraph/sourcegraph/cmd/searcher/protocol"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/comby"
 	"github.com/sourcegraph/sourcegraph/internal/lazyregexp"
 	"github.com/sourcegraph/sourcegraph/internal/search"
+	"github.com/sourcegraph/sourcegraph/internal/store"
 )
 
 // The Sourcegraph frontend and interface only allow LineMatches (matches on a
@@ -194,6 +197,31 @@ func languageMetric(matcher string, includePatterns *[]string) string {
 	return "inferred:.generic"
 }
 
+// filteredStructuralSearch filters the list of files with a regex search before passing the zip to comby
+func filteredStructuralSearch(ctx context.Context, zipPath string, zipFile *store.ZipFile, p *protocol.PatternInfo, repo api.RepoName) (matches []protocol.FileMatch, limitHit bool, err error) {
+	// Make a copy of the pattern info to modify it to work for a regex search
+	rp := *p
+	rp.Pattern = comby.StructuralPatToRegexpQuery(p.Pattern, false)
+	rp.IsStructuralPat = false
+	rp.IsRegExp = true
+	rg, err := compile(&rp)
+	if err != nil {
+		return nil, false, err
+	}
+
+	fileMatches, _, err := regexSearch(ctx, rg, zipFile, p.FileMatchLimit, true, false, false)
+	if err != nil {
+		return nil, false, err
+	}
+
+	matchedPaths := make([]string, 0, len(fileMatches))
+	for _, fm := range fileMatches {
+		matchedPaths = append(matchedPaths, fm.Path)
+	}
+
+	return structuralSearch(ctx, zipPath, p.Pattern, p.CombyRule, "", p.Languages, matchedPaths, repo)
+}
+
 func structuralSearch(ctx context.Context, zipPath, pattern, rule, extension string, languages, includePatterns []string, repo api.RepoName) (matches []protocol.FileMatch, limitHit bool, err error) {
 	log15.Info("structural search", "repo", string(repo))
 
@@ -263,11 +291,18 @@ func structuralSearchWithZoekt(ctx context.Context, p *protocol.Request) (matche
 			Languages:                    p.Languages,
 		}
 
-	repoBranches := map[string][]string{string(p.Repo): {string(p.Branch)}}
+	if p.Branch == "" {
+		p.Branch = "HEAD"
+	}
+	repoBranches := map[string][]string{string(p.Repo): {p.Branch}}
 	useFullDeadline := false
 	zoektMatches, limitHit, _, err := zoektSearch(ctx, patternInfo, repoBranches, time.Since, p.IndexerEndpoints, useFullDeadline, nil)
 	if err != nil {
 		return nil, false, false, err
+	}
+
+	if len(zoektMatches) == 0 {
+		return nil, false, false, nil
 	}
 
 	zipFile, err := ioutil.TempFile("", "*.zip")
@@ -291,11 +326,7 @@ func structuralSearchWithZoekt(ctx context.Context, p *protocol.Request) (matche
 	return matches, limitHit, false, err
 }
 
-var requestTotalStructuralSearch = prometheus.NewCounterVec(prometheus.CounterOpts{
+var requestTotalStructuralSearch = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "searcher_service_request_total_structural_search",
 	Help: "Number of returned structural search requests.",
 }, []string{"language"})
-
-func init() {
-	prometheus.MustRegister(requestTotalStructuralSearch)
-}

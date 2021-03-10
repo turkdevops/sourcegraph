@@ -35,6 +35,11 @@ type RepoNotFoundErr struct {
 	Name api.RepoName
 }
 
+func IsRepoNotFoundErr(err error) bool {
+	_, ok := err.(*RepoNotFoundErr)
+	return ok
+}
+
 func (e *RepoNotFoundErr) Error() string {
 	if e.Name != "" {
 		return fmt.Sprintf("repo not found: name=%q", e.Name)
@@ -49,7 +54,7 @@ func (e *RepoNotFoundErr) NotFound() bool {
 	return true
 }
 
-// RepoStore is a DB-backed implementation of the Repos.
+// RepoStore handles access to the repo table
 type RepoStore struct {
 	*basestore.Store
 
@@ -61,7 +66,8 @@ func Repos(db dbutil.DB) *RepoStore {
 	return &RepoStore{Store: basestore.NewWithDB(db, sql.TxOptions{})}
 }
 
-// NewRepoStoreWithDB instantiates and returns a new RepoStore using the other store handle.
+// NewRepoStoreWithDB instantiates and returns a new RepoStore using the other
+// store handle.
 func ReposWith(other basestore.ShareableStore) *RepoStore {
 	return &RepoStore{Store: basestore.NewWithHandle(other.Handle())}
 }
@@ -215,12 +221,16 @@ func (s *RepoStore) Count(ctx context.Context, opt ReposListOptions) (ct int, er
 	}
 
 	joins := []*sqlf.Query{}
+
 	if len(opt.ExternalServiceIDs) != 0 {
 		serviceIDQuery := []*sqlf.Query{}
 		for _, id := range opt.ExternalServiceIDs {
 			serviceIDQuery = append(serviceIDQuery, sqlf.Sprintf("%s", id))
 		}
 		joins = append(joins, sqlf.Sprintf("JOIN external_service_repos e ON (repo.id = e.repo_id AND e.external_service_id IN (%s))", sqlf.Join(serviceIDQuery, ",")))
+	} else if opt.UserID != 0 {
+		joins = append(joins, sqlf.Sprintf(`JOIN external_service_repos e ON (repo.id = e.repo_id)
+												   JOIN external_services es on es.id = e.external_service_id AND es.namespace_user_id = %s`, opt.UserID))
 	}
 
 	predQ := sqlf.Sprintf("TRUE")
@@ -228,7 +238,7 @@ func (s *RepoStore) Count(ctx context.Context, opt ReposListOptions) (ct int, er
 		predQ = sqlf.Sprintf("(%s)", sqlf.Join(conds, "AND"))
 	}
 
-	q := sqlf.Sprintf("SELECT COUNT(*) FROM repo %s WHERE deleted_at IS NULL AND %s", sqlf.Join(joins, " "), predQ)
+	q := sqlf.Sprintf("SELECT COUNT(*) FROM repo %s WHERE repo.deleted_at IS NULL AND %s", sqlf.Join(joins, " "), predQ)
 	tr.LazyPrintf("SQL: %v", q.Query(sqlf.PostgresBindVar))
 
 	var count int
@@ -472,6 +482,14 @@ type ReposListOptions struct {
 	// ExternalRepos of repos to list. When zero-valued, this is omitted from the predicate set.
 	ExternalRepos []api.ExternalRepoSpec
 
+	// ExternalRepoIncludePrefixes is the list of specs to include repos using
+	// prefix matching. When zero-valued, this is omitted from the predicate set.
+	ExternalRepoIncludePrefixes []api.ExternalRepoSpec
+
+	// ExternalRepoExcludePrefixes is the list of specs to exclude repos using
+	// prefix matching. When zero-valued, this is omitted from the predicate set.
+	ExternalRepoExcludePrefixes []api.ExternalRepoSpec
+
 	// PatternQuery is an expression tree of patterns to query. The atoms of
 	// the query are strings which are regular expression patterns.
 	PatternQuery query.Q
@@ -668,38 +686,8 @@ func (s *RepoStore) list(ctx context.Context, tr *trace.Trace, minimal bool, opt
 }
 
 type ListDefaultReposOptions struct {
-	Limit   int
-	AfterID int32
 	// If true, will only include uncloned default repos
 	OnlyUncloned bool
-}
-
-// ListAllDefaultRepos returns a list of all default repos. Default repos are a union of
-// repos in our default_repos table and repos owned by users.
-// It may perform multiple queries, fetching repos in batches.
-func (s *RepoStore) ListAllDefaultRepos(ctx context.Context) (results []*types.RepoName, err error) {
-	return s.listAllDefaultRepos(ctx, 10_000)
-}
-
-func (s *RepoStore) listAllDefaultRepos(ctx context.Context, batchSize int) (results []*types.RepoName, err error) {
-	opts := ListDefaultReposOptions{
-		Limit:   batchSize,
-		AfterID: 0,
-	}
-
-	for {
-		repos, err := s.ListDefaultRepos(ctx, opts)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, repos...)
-		if len(repos) < batchSize {
-			break
-		}
-		opts.AfterID = int32(repos[len(repos)-1].ID)
-	}
-
-	return results, nil
 }
 
 // ListDefaultRepos returns a list of default repos. Default repos are a union of
@@ -714,46 +702,28 @@ func (s *RepoStore) ListDefaultRepos(ctx context.Context, opts ListDefaultReposO
 
 	cloneClause := sqlf.Sprintf("TRUE")
 	if opts.OnlyUncloned {
-		cloneClause = sqlf.Sprintf("NOT r.cloned")
+		cloneClause = sqlf.Sprintf("NOT repo.cloned")
 	}
 
 	q := sqlf.Sprintf(`
 -- source: internal/database/repos.go:RepoStore.ListDefaultRepos
-SELECT
-    id,
-    name
-FROM
-    repo r
+SELECT repo.id, repo.name FROM repo
+JOIN default_repos dr ON repo.id = dr.repo_id
 WHERE
-    r.id > %s
-    AND EXISTS (
-        SELECT
-        FROM
-            external_service_repos sr
-            INNER JOIN external_services s ON s.id = sr.external_service_id
-        WHERE
-			s.cloud_default = false
-			AND s.deleted_at IS NULL
-			AND r.id = sr.repo_id
-            AND r.deleted_at IS NULL
-            AND %s
-    )
+      repo.deleted_at IS NULL
+      AND %s
+
 UNION
-    SELECT
-        r.id,
-        r.name
-    FROM
-        default_repos
-		JOIN repo r ON default_repos.repo_id = r.id
-	WHERE
-		r.deleted_at IS NULL
-		AND r.id > %s
-		AND %s
 
-	ORDER BY id ASC
-	LIMIT %s`, opts.AfterID, cloneClause, opts.AfterID, cloneClause, opts.Limit)
-
-	var repos []*types.RepoName
+SELECT repo.id, repo.name FROM repo
+JOIN external_service_repos esr ON repo.id = esr.repo_id
+JOIN external_services es ON esr.external_service_id = es.id
+WHERE
+      NOT es.cloud_default
+      AND es.deleted_at IS NULL
+      AND repo.deleted_at IS NULL
+      AND %s
+`, cloneClause, cloneClause)
 
 	rows, err := s.Query(ctx, q)
 	if err != nil {
@@ -765,13 +735,13 @@ UNION
 		if err := rows.Scan(&r.ID, &r.Name); err != nil {
 			return nil, errors.Wrap(err, "scanning row from default_repos table")
 		}
-		repos = append(repos, &r)
+		results = append(results, &r)
 	}
 	if err = rows.Err(); err != nil {
 		return nil, errors.Wrap(err, "scanning rows for default repos")
 	}
 
-	return repos, nil
+	return results, nil
 }
 
 // Create inserts repos and their sources, respectively in the repo and external_service_repos table.
@@ -1172,6 +1142,22 @@ func (*RepoStore) listSQL(opt ReposListOptions) (conds []*sqlf.Query, err error)
 			er = append(er, sqlf.Sprintf("(external_id = %s AND external_service_type = %s AND external_service_id = %s)", spec.ID, spec.ServiceType, spec.ServiceID))
 		}
 		conds = append(conds, sqlf.Sprintf("(%s)", sqlf.Join(er, "\n OR ")))
+	}
+
+	if len(opt.ExternalRepoIncludePrefixes) > 0 {
+		er := make([]*sqlf.Query, 0, len(opt.ExternalRepoIncludePrefixes))
+		for _, spec := range opt.ExternalRepoIncludePrefixes {
+			er = append(er, sqlf.Sprintf("(external_id LIKE %s AND external_service_type = %s AND external_service_id = %s)", spec.ID+"%", spec.ServiceType, spec.ServiceID))
+		}
+		conds = append(conds, sqlf.Sprintf("(%s)", sqlf.Join(er, "\n OR ")))
+	}
+
+	if len(opt.ExternalRepoExcludePrefixes) > 0 {
+		er := make([]*sqlf.Query, 0, len(opt.ExternalRepoExcludePrefixes))
+		for _, spec := range opt.ExternalRepoExcludePrefixes {
+			er = append(er, sqlf.Sprintf("(external_id NOT LIKE %s AND external_service_type = %s AND external_service_id = %s)", spec.ID+"%", spec.ServiceType, spec.ServiceID))
+		}
+		conds = append(conds, sqlf.Sprintf("(%s)", sqlf.Join(er, "\n AND ")))
 	}
 
 	if opt.NoForks {

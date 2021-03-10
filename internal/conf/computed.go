@@ -144,7 +144,7 @@ func DeployType() string {
 	if e := os.Getenv("DEPLOY_TYPE"); e != "" {
 		return e
 	}
-	// Default to Kubernetes cluster so that every Kubernetes c
+	// Default to Kubernetes cluster so that every Kubernetes
 	// cluster deployment doesn't need to be configured with DEPLOY_TYPE.
 	return DeployKubernetes
 }
@@ -219,11 +219,30 @@ func SearchIndexEnabled() bool {
 	return DeployType() != DeploySingleDocker
 }
 
-func CampaignsEnabled() bool {
-	if enabled := Get().CampaignsEnabled; enabled != nil {
+func BatchChangesEnabled() bool {
+	// TODO(campaigns-deprecation): This check can be removed once we remove
+	// the deprecated site-config settings.
+	if deprecated := Get().CampaignsEnabled; deprecated != nil {
+		return *deprecated
+	}
+
+	if enabled := Get().BatchChangesEnabled; enabled != nil {
 		return *enabled
 	}
 	return true
+}
+
+func BatchChangesRestrictedToAdmins() bool {
+	// TODO(campaigns-deprecation): This check can be removed once we remove
+	// the deprecated site-config settings.
+	if deprecated := Get().CampaignsRestrictToAdmins; deprecated != nil {
+		return *deprecated
+	}
+
+	if restricted := Get().BatchChangesRestrictToAdmins; restricted != nil {
+		return *restricted
+	}
+	return false
 }
 
 func CodeIntelAutoIndexingEnabled() bool {
@@ -231,6 +250,13 @@ func CodeIntelAutoIndexingEnabled() bool {
 		return *enabled
 	}
 	return false
+}
+
+func ProductResearchPageEnabled() bool {
+	if enabled := Get().ProductResearchPageEnabled; enabled != nil {
+		return *enabled
+	}
+	return true
 }
 
 func ExternalURL() string {

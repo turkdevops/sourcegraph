@@ -4,3 +4,7 @@
 - [Campaign spec templating](campaign_spec_templating.md)
 - [Troubleshooting](troubleshooting.md)
 - [Requirements](requirements.md)
+- [CLI](../../cli/references/campaigns/index.md)
+- [FAQ](faq.md)
+- [Name change](name-change.md)
+

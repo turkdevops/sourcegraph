@@ -2,25 +2,25 @@ package resolvers
 
 import (
 	"context"
-	"errors"
 	"strconv"
 	"sync"
 
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
+	"github.com/sourcegraph/sourcegraph/enterprise/internal/insights/discovery"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/insights/store"
-	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/schema"
 )
 
 var _ graphqlbackend.InsightConnectionResolver = &insightConnectionResolver{}
 
 type insightConnectionResolver struct {
-	store        *store.Store
-	settingStore *database.SettingStore
+	store        store.Interface
+	settingStore discovery.SettingStore
 
 	// cache results because they are used by multiple fields
 	once     sync.Once
-	insights []graphqlbackend.InsightResolver
+	insights []*schema.Insight
 	next     int64
 	err      error
 }
@@ -38,7 +38,8 @@ func (r *insightConnectionResolver) Nodes(ctx context.Context) ([]graphqlbackend
 }
 
 func (r *insightConnectionResolver) TotalCount(ctx context.Context) (int32, error) {
-	return 0, errors.New("not yet implemented")
+	insights, _, err := r.compute(ctx)
+	return int32(len(insights)), err
 }
 
 func (r *insightConnectionResolver) PageInfo(ctx context.Context) (*graphqlutil.PageInfo, error) {
@@ -52,10 +53,31 @@ func (r *insightConnectionResolver) PageInfo(ctx context.Context) (*graphqlutil.
 	return graphqlutil.HasNextPage(false), nil
 }
 
-func (r *insightConnectionResolver) compute(ctx context.Context) ([]graphqlbackend.InsightResolver, int64, error) {
+func (r *insightConnectionResolver) compute(ctx context.Context) ([]*schema.Insight, int64, error) {
 	r.once.Do(func() {
-		// TODO: populate r.insights, r.next, r.err
-		// TODO: locate insights from user, org, global settings using r.settingStore.ListAll()
+		r.insights, r.err = discovery.Discover(ctx, r.settingStore)
 	})
 	return r.insights, r.next, r.err
+}
+
+// InsightResolver is also defined here as it is covered by the same tests.
+
+var _ graphqlbackend.InsightResolver = &insightResolver{}
+
+type insightResolver struct {
+	store   store.Interface
+	insight *schema.Insight
+}
+
+func (r *insightResolver) Title() string { return r.insight.Title }
+
+func (r *insightResolver) Description() string { return r.insight.Description }
+
+func (r *insightResolver) Series() []graphqlbackend.InsightSeriesResolver {
+	series := r.insight.Series
+	resolvers := make([]graphqlbackend.InsightSeriesResolver, 0, len(series))
+	for _, series := range series {
+		resolvers = append(resolvers, &insightSeriesResolver{store: r.store, series: series})
+	}
+	return resolvers
 }

@@ -11,11 +11,12 @@ import (
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/globals"
 	"github.com/sourcegraph/sourcegraph/cmd/repo-updater/repoupdater"
 	"github.com/sourcegraph/sourcegraph/cmd/repo-updater/shared"
-	"github.com/sourcegraph/sourcegraph/enterprise/cmd/repo-updater/authz"
+	"github.com/sourcegraph/sourcegraph/enterprise/cmd/repo-updater/internal/authz"
 	frontendAuthz "github.com/sourcegraph/sourcegraph/enterprise/internal/authz"
-	"github.com/sourcegraph/sourcegraph/enterprise/internal/campaigns"
+	"github.com/sourcegraph/sourcegraph/enterprise/internal/batches"
 	codemonitorsBackground "github.com/sourcegraph/sourcegraph/enterprise/internal/codemonitors/background"
 	edb "github.com/sourcegraph/sourcegraph/enterprise/internal/database"
+	insightsBackground "github.com/sourcegraph/sourcegraph/enterprise/internal/insights/background"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	ossAuthz "github.com/sourcegraph/sourcegraph/internal/authz"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
@@ -48,8 +49,12 @@ func enterpriseInit(
 	ctx := actor.WithInternalActor(context.Background())
 
 	codemonitorsBackground.StartBackgroundJobs(ctx, db)
+	insightsBackground.StartBackgroundJobs(ctx, db)
 
-	campaigns.InitBackgroundJobs(ctx, db, cf, server)
+	syncRegistry := batches.InitBackgroundJobs(ctx, db, cf)
+	if server != nil {
+		server.ChangesetSyncRegistry = syncRegistry
+	}
 
 	// TODO(jchen): This is an unfortunate compromise to not rewrite ossDB.ExternalServices for now.
 	dbconn.Global = db

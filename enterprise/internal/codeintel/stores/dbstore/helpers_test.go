@@ -15,6 +15,7 @@ import (
 
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/commitgraph"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/stores/lsifstore"
+	"github.com/sourcegraph/sourcegraph/enterprise/lib/codeintel/semantic"
 	"github.com/sourcegraph/sourcegraph/internal/database/basestore"
 	"github.com/sourcegraph/sourcegraph/internal/database/dbconn"
 	"github.com/sourcegraph/sourcegraph/internal/database/dbutil"
@@ -204,8 +205,17 @@ func insertRepo(t testing.TB, db *sql.DB, id int, name string) {
 
 // insertPackageReferences populates the lsif_references table with the given package references.
 func insertPackageReferences(t testing.TB, store *Store, packageReferences []lsifstore.PackageReference) {
-	if err := store.UpdatePackageReferences(context.Background(), packageReferences); err != nil {
-		t.Fatalf("unexpected error updating package references: %s", err)
+	for _, packageReference := range packageReferences {
+		if err := store.UpdatePackageReferences(context.Background(), packageReference.DumpID, []semantic.PackageReference{
+			{
+				Scheme:  packageReference.Scheme,
+				Name:    packageReference.Name,
+				Version: packageReference.Version,
+				Filter:  packageReference.Filter,
+			},
+		}); err != nil {
+			t.Fatalf("unexpected error updating package references: %s", err)
+		}
 	}
 }
 
@@ -392,4 +402,24 @@ func scanStates(rows *sql.Rows, queryErr error) (_ map[int]string, err error) {
 	}
 
 	return states, nil
+}
+
+func dumpToUpload(expected Dump) Upload {
+	return Upload{
+		ID:                expected.ID,
+		Commit:            expected.Commit,
+		Root:              expected.Root,
+		UploadedAt:        expected.UploadedAt,
+		State:             expected.State,
+		FailureMessage:    expected.FailureMessage,
+		StartedAt:         expected.StartedAt,
+		FinishedAt:        expected.FinishedAt,
+		ProcessAfter:      expected.ProcessAfter,
+		NumResets:         expected.NumResets,
+		NumFailures:       expected.NumFailures,
+		RepositoryID:      expected.RepositoryID,
+		RepositoryName:    expected.RepositoryName,
+		Indexer:           expected.Indexer,
+		AssociatedIndexID: expected.AssociatedIndexID,
+	}
 }

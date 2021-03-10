@@ -10,6 +10,7 @@ import (
 
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
+
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/conf/reposource"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
@@ -92,7 +93,11 @@ func (s BitbucketServerSource) ListRepos(ctx context.Context, results chan Sourc
 
 func (s BitbucketServerSource) WithAuthenticator(a auth.Authenticator) (Source, error) {
 	switch a.(type) {
-	case *auth.OAuthBearerToken, *auth.BasicAuth, *bitbucketserver.SudoableOAuthClient:
+	case *auth.OAuthBearerToken,
+		*auth.OAuthBearerTokenWithSSH,
+		*auth.BasicAuth,
+		*auth.BasicAuthWithSSH,
+		*bitbucketserver.SudoableOAuthClient:
 		break
 
 	default:
@@ -146,7 +151,7 @@ func (s BitbucketServerSource) CreateChangeset(ctx context.Context, c *Changeset
 }
 
 // CloseChangeset closes the given *Changeset on the code host and updates the
-// Metadata column in the *campaigns.Changeset to the newly closed pull request.
+// Metadata column in the *batches.Changeset to the newly closed pull request.
 func (s BitbucketServerSource) CloseChangeset(ctx context.Context, c *Changeset) error {
 	pr, ok := c.Changeset.Metadata.(*bitbucketserver.PullRequest)
 	if !ok {
@@ -175,7 +180,7 @@ func (s BitbucketServerSource) LoadChangeset(ctx context.Context, cs *Changeset)
 
 	err = s.client.LoadPullRequest(ctx, pr)
 	if err != nil {
-		if bitbucketserver.IsNotFound(err) {
+		if err == bitbucketserver.ErrPullRequestNotFound {
 			return ChangesetNotFoundError{Changeset: cs}
 		}
 
@@ -234,7 +239,7 @@ func (s BitbucketServerSource) UpdateChangeset(ctx context.Context, c *Changeset
 }
 
 // ReopenChangeset reopens the *Changeset on the code host and updates the
-// Metadata column in the *campaigns.Changeset.
+// Metadata column in the *batches.Changeset.
 func (s BitbucketServerSource) ReopenChangeset(ctx context.Context, c *Changeset) error {
 	pr, ok := c.Changeset.Metadata.(*bitbucketserver.PullRequest)
 	if !ok {

@@ -8,14 +8,15 @@ import (
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
+
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/auth"
 	"github.com/sourcegraph/sourcegraph/internal/httpcli"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 )
 
-// A Sourcer converts the given ExternalServices to Sources
-// whose yielded Repos should be synced.
+// A Sourcer converts the given ExternalServices to Sources whose yielded Repos
+// should be synced.
 type Sourcer func(...*types.ExternalService) (Sources, error)
 
 // NewSourcer returns a Sourcer that converts the given ExternalServices
@@ -151,7 +152,10 @@ func newUnsupportedAuthenticatorError(source string, a auth.Authenticator) Unsup
 }
 
 // ChangesetNotFoundError is returned by LoadChangeset if the changeset
-// could not be found on the codehost.
+// could not be found on the codehost. This is only returned, if the
+// changeset is actually not found. Other not found errors, such as
+// repo not found should NOT raise this error, since it will cause
+// the changeset to be marked as deleted.
 type ChangesetNotFoundError struct {
 	Changeset *Changeset
 }

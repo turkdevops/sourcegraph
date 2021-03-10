@@ -21,11 +21,13 @@ import (
 	"time"
 
 	"github.com/inconshreveable/log15"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+
+	nettrace "golang.org/x/net/trace"
 
 	"github.com/sourcegraph/sourcegraph/cmd/searcher/protocol"
 	"github.com/sourcegraph/sourcegraph/internal/store"
 	"github.com/sourcegraph/sourcegraph/internal/trace/ot"
-	nettrace "golang.org/x/net/trace"
 
 	"github.com/pkg/errors"
 
@@ -154,6 +156,7 @@ func (s *Service) search(ctx context.Context, p *protocol.Request) (matches []pr
 	span.SetTag("patternMatchesPath", p.PatternMatchesPath)
 	span.SetTag("deadline", p.Deadline)
 	span.SetTag("indexerEndpoints", p.IndexerEndpoints)
+	span.SetTag("select", p.Select)
 	defer func(start time.Time) {
 		code := "200"
 		// We often have canceled and timed out requests. We do not want to
@@ -191,7 +194,7 @@ func (s *Service) search(ctx context.Context, p *protocol.Request) (matches []pr
 		}
 	}(time.Now())
 
-	if p.IsStructuralPat && p.CombyRule != `where "backcompat" == "backcompat"` {
+	if p.IsStructuralPat && p.Indexed && p.CombyRule != `where "backcompat" == "backcompat"` {
 		// Execute the new structural search path that directly calls Zoekt.
 		return structuralSearchWithZoekt(ctx, p)
 	}
@@ -239,8 +242,10 @@ func (s *Service) search(ctx context.Context, p *protocol.Request) (matches []pr
 	archiveFiles.Observe(float64(nFiles))
 	archiveSize.Observe(float64(bytes))
 
-	if p.IsStructuralPat {
+	if p.IsStructuralPat && p.CombyRule == `where "backcompat" == "backcompat"` {
 		matches, limitHit, err = structuralSearch(ctx, zipPath, p.Pattern, p.CombyRule, "", p.Languages, p.IncludePatterns, p.Repo)
+	} else if p.IsStructuralPat {
+		matches, limitHit, err = filteredStructuralSearch(ctx, zipPath, zf, &p.PatternInfo, p.Repo)
 	} else {
 		matches, limitHit, err = regexSearch(ctx, rg, zf, p.FileMatchLimit, p.PatternMatchesContent, p.PatternMatchesPath, p.IsNegated)
 	}
@@ -267,32 +272,25 @@ func validateParams(p *protocol.Request) error {
 const megabyte = float64(1000 * 1000)
 
 var (
-	running = prometheus.NewGauge(prometheus.GaugeOpts{
+	running = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "searcher_service_running",
 		Help: "Number of running search requests.",
 	})
-	archiveSize = prometheus.NewHistogram(prometheus.HistogramOpts{
+	archiveSize = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "searcher_service_archive_size_bytes",
 		Help:    "Observes the size when an archive is searched.",
 		Buckets: []float64{1 * megabyte, 10 * megabyte, 100 * megabyte, 500 * megabyte, 1000 * megabyte, 5000 * megabyte},
 	})
-	archiveFiles = prometheus.NewHistogram(prometheus.HistogramOpts{
+	archiveFiles = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "searcher_service_archive_files",
 		Help:    "Observes the number of files when an archive is searched.",
 		Buckets: []float64{100, 1000, 10000, 50000, 100000},
 	})
-	requestTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	requestTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "searcher_service_request_total",
 		Help: "Number of returned search requests.",
 	}, []string{"code"})
 )
-
-func init() {
-	prometheus.MustRegister(running)
-	prometheus.MustRegister(archiveSize)
-	prometheus.MustRegister(archiveFiles)
-	prometheus.MustRegister(requestTotal)
-}
 
 type badRequestError struct{ msg string }
 

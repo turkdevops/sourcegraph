@@ -11,6 +11,7 @@ import (
 
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
+
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/gitserver/protocol"
 )
@@ -28,7 +29,7 @@ func (s *Server) repoInfo(ctx context.Context, repo api.RepoName) (*protocol.Rep
 		if err != nil {
 			return nil, err
 		}
-		resp.URL = remoteURL
+		resp.URL = remoteURL.String()
 	}
 	{
 		resp.CloneProgress, resp.CloneInProgress = s.locker.Status(dir)

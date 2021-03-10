@@ -8,6 +8,7 @@ import (
 
 	"github.com/inconshreveable/log15"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/envvar"
@@ -75,7 +76,7 @@ func (*schemaResolver) LogUserEvent(ctx context.Context, args *struct {
 	return nil, usagestatsdeprecated.LogActivity(actor.IsAuthenticated(), actor.UID, args.UserCookieID, args.Event)
 }
 
-func (*schemaResolver) LogEvent(ctx context.Context, args *struct {
+func (r *schemaResolver) LogEvent(ctx context.Context, args *struct {
 	Event        string
 	UserCookieID string
 	URL          string
@@ -101,7 +102,7 @@ func (*schemaResolver) LogEvent(ctx context.Context, args *struct {
 	}
 
 	actor := actor.FromContext(ctx)
-	return nil, usagestats.LogEvent(ctx, usagestats.Event{
+	return nil, usagestats.LogEvent(ctx, r.db, usagestats.Event{
 		EventName:    args.Event,
 		URL:          args.URL,
 		UserID:       actor.UID,
@@ -112,22 +113,17 @@ func (*schemaResolver) LogEvent(ctx context.Context, args *struct {
 }
 
 var (
-	searchLatenciesFrontendCodeLoad = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	searchLatenciesFrontendCodeLoad = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "src_search_latency_frontend_code_load_seconds",
 		Help:    "Milliseconds the webapp frontend spends waiting for search result code snippets to load.",
 		Buckets: trace.UserLatencyBuckets,
 	}, nil)
-	searchLatenciesFrontendFirstResult = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	searchLatenciesFrontendFirstResult = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "src_search_latency_frontend_first_result_seconds",
 		Help:    "Milliseconds the webapp frontend spends waiting for the first search result to load.",
 		Buckets: trace.UserLatencyBuckets,
 	}, []string{"type"})
 )
-
-func init() {
-	prometheus.MustRegister(searchLatenciesFrontendCodeLoad)
-	prometheus.MustRegister(searchLatenciesFrontendFirstResult)
-}
 
 // exportPrometheusSearchLatencies exports Prometheus search latency metrics given a GraphQL
 // LogEvent payload.

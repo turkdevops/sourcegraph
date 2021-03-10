@@ -1,7 +1,9 @@
 package resolvers
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/opentracing/opentracing-go/log"
@@ -24,7 +26,7 @@ type Resolver interface {
 	IndexConnectionResolver(opts store.GetIndexesOptions) *IndexesResolver
 	DeleteUploadByID(ctx context.Context, uploadID int) error
 	DeleteIndexByID(ctx context.Context, id int) error
-	IndexConfiguration(ctx context.Context, repositoryID int) (store.IndexConfiguration, error)
+	IndexConfiguration(ctx context.Context, repositoryID int) ([]byte, error)
 	UpdateIndexConfigurationByRepositoryID(ctx context.Context, repositoryID int, configuration string) error
 	CommitGraph(ctx context.Context, repositoryID int) (gql.CodeIntelligenceCommitGraphResolver, error)
 	QueueAutoIndexJobForRepo(ctx context.Context, repositoryID int) error
@@ -32,30 +34,41 @@ type Resolver interface {
 }
 
 type resolver struct {
-	dbStore       DBStore
-	lsifStore     LSIFStore
-	codeIntelAPI  CodeIntelAPI
-	indexEnqueuer IndexEnqueuer
-	hunkCache     HunkCache
-	operations    *operations
+	dbStore         DBStore
+	lsifStore       LSIFStore
+	gitserverClient GitserverClient
+	indexEnqueuer   IndexEnqueuer
+	hunkCache       HunkCache
+	operations      *operations
 }
 
 // NewResolver creates a new resolver with the given services.
 func NewResolver(
 	dbStore DBStore,
 	lsifStore LSIFStore,
-	codeIntelAPI CodeIntelAPI,
+	gitserverClient GitserverClient,
 	indexEnqueuer IndexEnqueuer,
 	hunkCache HunkCache,
 	observationContext *observation.Context,
 ) Resolver {
+	return newResolver(dbStore, lsifStore, gitserverClient, indexEnqueuer, hunkCache, observationContext)
+}
+
+func newResolver(
+	dbStore DBStore,
+	lsifStore LSIFStore,
+	gitserverClient GitserverClient,
+	indexEnqueuer IndexEnqueuer,
+	hunkCache HunkCache,
+	observationContext *observation.Context,
+) *resolver {
 	return &resolver{
-		dbStore:       dbStore,
-		lsifStore:     lsifStore,
-		codeIntelAPI:  codeIntelAPI,
-		indexEnqueuer: indexEnqueuer,
-		hunkCache:     hunkCache,
-		operations:    newOperations(observationContext),
+		dbStore:         dbStore,
+		lsifStore:       lsifStore,
+		gitserverClient: gitserverClient,
+		indexEnqueuer:   indexEnqueuer,
+		hunkCache:       hunkCache,
+		operations:      newOperations(observationContext),
 	}
 }
 
@@ -85,13 +98,30 @@ func (r *resolver) DeleteIndexByID(ctx context.Context, id int) error {
 	return err
 }
 
-func (r *resolver) IndexConfiguration(ctx context.Context, repositoryID int) (store.IndexConfiguration, error) {
-	configuration, ok, err := r.dbStore.GetIndexConfigurationByRepositoryID(ctx, repositoryID)
-	if err != nil || !ok {
-		return store.IndexConfiguration{}, err
+func (r *resolver) IndexConfiguration(ctx context.Context, repositoryID int) ([]byte, error) {
+	configuration, exists, err := r.dbStore.GetIndexConfigurationByRepositoryID(ctx, repositoryID)
+	if err != nil {
+		return nil, err
 	}
 
-	return configuration, nil
+	if exists {
+		return configuration.Data, nil
+	}
+
+	// nothing in DB, prepopulate with a best guess from the inference engine
+	maybeConfig, err := r.indexEnqueuer.InferIndexConfiguration(ctx, repositoryID)
+	if err != nil || maybeConfig == nil {
+		return nil, err
+	}
+
+	marshaled, err := config.MarshalJSON(*maybeConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	var indented bytes.Buffer
+	_ = json.Indent(&indented, marshaled, "", "\t")
+	return indented.Bytes(), nil
 }
 
 func (r *resolver) UpdateIndexConfigurationByRepositoryID(ctx context.Context, repositoryID int, configuration string) error {
@@ -121,7 +151,7 @@ const slowQueryResolverRequestThreshold = time.Second
 // given repository, commit, and path, then constructs a new query resolver instance which
 // can be used to answer subsequent queries.
 func (r *resolver) QueryResolver(ctx context.Context, args *gql.GitBlobLSIFDataArgs) (_ QueryResolver, err error) {
-	ctx, endObservation := observeResolver(ctx, &err, "QueryResolver", r.operations.queryResolver, slowQueryResolverRequestThreshold, observation.Args{
+	ctx, _, endObservation := observeResolver(ctx, &err, "QueryResolver", r.operations.queryResolver, slowQueryResolverRequestThreshold, observation.Args{
 		LogFields: []log.Field{
 			log.Int("repositoryID", int(args.Repo.ID)),
 			log.String("commit", string(args.Commit)),
@@ -132,8 +162,12 @@ func (r *resolver) QueryResolver(ctx context.Context, args *gql.GitBlobLSIFDataA
 	})
 	defer endObservation()
 
-	dumps, err := r.codeIntelAPI.FindClosestDumps(
+	cachedCommitChecker := newCachedCommitChecker(r.gitserverClient)
+	cachedCommitChecker.set(int(args.Repo.ID), string(args.Commit))
+
+	dumps, err := r.findClosestDumps(
 		ctx,
+		cachedCommitChecker,
 		int(args.Repo.ID),
 		string(args.Commit),
 		args.Path,
@@ -147,7 +181,7 @@ func (r *resolver) QueryResolver(ctx context.Context, args *gql.GitBlobLSIFDataA
 	return NewQueryResolver(
 		r.dbStore,
 		r.lsifStore,
-		r.codeIntelAPI,
+		cachedCommitChecker,
 		NewPositionAdjuster(args.Repo, string(args.Commit), r.hunkCache),
 		int(args.Repo.ID),
 		string(args.Commit),

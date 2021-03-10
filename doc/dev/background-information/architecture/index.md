@@ -38,7 +38,7 @@ Code intelligence surfaces data (for example: doc comments for a symbol) and act
 
 By default, Sourcegraph provides imprecise [search-based code intelligence](../../../code_intelligence/explanations/search_based_code_intelligence.md). This reuses all the architecture that makes search fast, but it can result in false positives (for example: finding two definitions for a symbol, or references that aren't actually references), or false negatives (for example: not able to find the definition or all references). This is the default because it works with no extra configuration and is pretty good for many use cases and languages. We support a lot of languages this way because it only requires writing a few regular expressions.
 
-With some setup, customer can enable [precise code intelligence](../../../code_intelligence/explanations/precise_code_intelligence.md). Repositories add a step to their build pipeline that computes the index for that revision of code and uploads it to Sourcegraph. We have to write language specific indexers, so adding precise code intel support for new languages is a non-trivial task.
+With some setup, customers can enable [precise code intelligence](../../../code_intelligence/explanations/precise_code_intelligence.md). Repositories add a step to their build pipeline that computes the index for that revision of code and uploads it to Sourcegraph. We have to write language specific indexers, so adding precise code intel support for new languages is a non-trivial task.
 
 If you want to learn more about code intelligence:
 
@@ -69,7 +69,7 @@ Sample use cases for this are for tracking migrations, usage of libraries across
 
 Code insights are currently feature-flagged - set `"experimentalFeatures": { "codeInsights": true }` in your user settings to enable them.
 
-Code insights currently work through [**extensions**](#sourcegraph-extension-aPI).
+Code insights currently work through [**extensions**](#sourcegraph-extension-api).
 A code insight extension can register a _view provider_ that contributes a graph to either the repository/directory page, the [search homepage](https://sourcegraph.com/search), or the [global "Insights" dashboard](https://sourcegraph.com/insights) reachable from the navbar.
 It is called on-demand on the client (the browser) to return the data needed for the chart.
 _How_ that extension produces the data is up to the extension - it can run search queries, query code intelligence data or analyze Git data using the Sourcegraph GraphQL API, or it can query an external service using its public API, e.g. Codecov.
@@ -205,7 +205,7 @@ You can click on each component to jump to its respective code repository or sub
 <object data="/dev/background-information/architecture/architecture.svg" type="image/svg+xml" style="width:100%; height: 100%">
 </object>
 
-Note that almost every service has a link back to the frontend, from which is gathers configuration updates.
+Note that almost every service has a link back to the frontend, from which it gathers configuration updates.
 These edges are omitted for clarity.
 
 ## Other resources

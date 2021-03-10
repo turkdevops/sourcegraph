@@ -2,6 +2,7 @@ import React, { useCallback, useState } from 'react'
 import Dialog from '@reach/dialog'
 
 import { Form } from '../../../../../branded/src/components/Form'
+import { LoaderButton } from '../../../components/LoaderButton'
 import { deleteExternalService } from '../../../components/externalServices/backend'
 import { asError, ErrorLike } from '../../../../../shared/src/util/errors'
 import { Scalars, ExternalServiceKind } from '../../../graphql-operations'
@@ -38,7 +39,7 @@ export const RemoveCodeHostConnectionModal: React.FunctionComponent<{
     onDidRemove: () => void
     onDidCancel: () => void
     onDidError: (error: ErrorLike) => void
-}> = ({ id, name, kind, repoCount, onDidRemove, onDidCancel, onDidError }) => {
+}> = ({ id, name, repoCount, onDidRemove, onDidCancel, onDidError }) => {
     const [isLoading, setIsLoading] = useState(false)
 
     const onConnectionRemove = useCallback<React.FormEventHandler<HTMLFormElement>>(
@@ -61,13 +62,18 @@ export const RemoveCodeHostConnectionModal: React.FunctionComponent<{
     return (
         <Dialog
             className="modal-body modal-body--top-third p-4 rounded border"
-            aria-labelledby={`label--remove-${kind}-token`}
+            aria-labelledby={`heading--remove-${name}-code-host`}
+            aria-describedby={`description--remove-${name}-code-host`}
             onDismiss={onDidCancel}
         >
             <div className="web-content">
-                <h3 className="text-danger mb-4">Remove connection with {name}?</h3>
+                <h3 id={`heading--remove-${name}-code-host`} className="text-danger mb-4">
+                    Remove connection with {name}?
+                </h3>
                 <Form onSubmit={onConnectionRemove}>
-                    <div className="form-group mb-4">{getWarningMessage(name, repoCount)}</div>
+                    <div id={`description--remove-${name}-code-host`} className="form-group mb-4">
+                        {getWarningMessage(name, repoCount)}
+                    </div>
                     <div className="d-flex justify-content-end">
                         <button
                             type="button"
@@ -77,9 +83,14 @@ export const RemoveCodeHostConnectionModal: React.FunctionComponent<{
                         >
                             Cancel
                         </button>
-                        <button type="submit" disabled={isLoading} className="btn btn-danger">
-                            Yes, remove connection
-                        </button>
+                        <LoaderButton
+                            type="submit"
+                            className="btn btn-danger"
+                            loading={isLoading}
+                            disabled={isLoading}
+                            label="Yes, remove connection"
+                            alwaysShowLabel={true}
+                        />
                     </div>
                 </Form>
             </div>

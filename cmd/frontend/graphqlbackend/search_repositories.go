@@ -4,8 +4,10 @@ import (
 	"context"
 	"math"
 	"regexp"
+	"sync"
 
 	"github.com/sourcegraph/sourcegraph/internal/api"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbutil"
 	"github.com/sourcegraph/sourcegraph/internal/search/streaming"
 
 	"github.com/sourcegraph/sourcegraph/internal/search"
@@ -19,19 +21,27 @@ var repoIcon = "data:image/svg+xml;base64,PHN2ZyB2ZXJzaW9uPSIxLjEiIGlkPSJMYXllcl
 //
 // For a repository to match a query, the repository's name must match all of the repo: patterns AND the
 // default patterns (i.e., the patterns that are not prefixed with any search field).
-func searchRepositories(ctx context.Context, args *search.TextParameters, limit int32) (res []SearchResultResolver, common *streaming.Stats, err error) {
+func searchRepositories(ctx context.Context, db dbutil.DB, args *search.TextParameters, limit int32, stream Sender) error {
 	if mockSearchRepositories != nil {
-		return mockSearchRepositories(args)
+		results, stats, err := mockSearchRepositories(args)
+		stream.Send(SearchEvent{
+			Results: results,
+			Stats:   statsDeref(stats),
+		})
+		return err
 	}
+
+	ctx, stream, cancel := WithLimit(ctx, stream, int(limit))
+	defer cancel()
 
 	fieldAllowlist := map[string]struct{}{
 		query.FieldRepo:               {},
 		query.FieldRepoGroup:          {},
+		query.FieldContext:            {},
 		query.FieldType:               {},
 		query.FieldDefault:            {},
 		query.FieldIndex:              {},
 		query.FieldCount:              {},
-		query.FieldMax:                {},
 		query.FieldTimeout:            {},
 		query.FieldFork:               {},
 		query.FieldArchived:           {},
@@ -40,12 +50,13 @@ func searchRepositories(ctx context.Context, args *search.TextParameters, limit 
 		query.FieldRepoHasFile:        {},
 		query.FieldRepoHasCommitAfter: {},
 		query.FieldPatternType:        {},
+		query.FieldSelect:             {},
 	}
 	// Don't return repo results if the search contains fields that aren't on the allowlist.
 	// Matching repositories based whether they contain files at a certain path (etc.) is not yet implemented.
 	for field := range args.Query.Fields() {
 		if _, ok := fieldAllowlist[field]; !ok {
-			return nil, nil, nil
+			return nil
 		}
 	}
 
@@ -56,51 +67,65 @@ func searchRepositories(ctx context.Context, args *search.TextParameters, limit 
 
 	pattern, err := regexp.Compile(patternRe)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 
 	// Filter args.Repos by matching their names against the query pattern.
 	resolved, err := getRepos(ctx, args.RepoPromise)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 
-	repos := matchRepos(pattern, resolved)
+	results := make(chan []*search.RepositoryRevisions)
+	go func() {
+		defer close(results)
+		matchRepos(pattern, resolved, results)
+	}()
 
 	// Filter the repos if there is a repohasfile: or -repohasfile field.
 	if len(args.PatternInfo.FilePatternsReposMustExclude) > 0 || len(args.PatternInfo.FilePatternsReposMustInclude) > 0 {
-		repos, err = reposToAdd(ctx, args, repos)
-		if err != nil {
-			return nil, nil, err
+		// Fallback to batch for reposToAdd
+		var repos []*search.RepositoryRevisions
+		for matched := range results {
+			repos = append(repos, matched...)
 		}
+		repos, err = reposToAdd(ctx, db, args, repos)
+		if err != nil {
+			return err
+		}
+		stream.Send(SearchEvent{
+			Results: repoRevsToSearchResultResolver(ctx, db, repos),
+		})
+		return nil
 	}
 
-	limitHit := false
+	for repos := range results {
+		stream.Send(SearchEvent{
+			Results: repoRevsToSearchResultResolver(ctx, db, repos),
+		})
+	}
 
-	// Convert the repos to RepositoryResolvers.
+	return nil
+}
+
+func repoRevsToSearchResultResolver(ctx context.Context, db dbutil.DB, repos []*search.RepositoryRevisions) []SearchResultResolver {
 	results := make([]SearchResultResolver, 0, len(repos))
 	for _, r := range repos {
-		if len(results) == int(limit) {
-			limitHit = true
-			break
-		}
-
-		var revs []string
-		revs, err = r.ExpandedRevSpecs(ctx)
+		revs, err := r.ExpandedRevSpecs(ctx)
 		if err != nil { // fallback to just return revspecs
 			revs = r.RevSpecs()
 		}
 		for _, rev := range revs {
-			results = append(results, &RepositoryResolver{innerRepo: r.Repo.ToRepo(), icon: repoIcon, rev: rev})
+			rr := NewRepositoryResolver(db, r.Repo.ToRepo())
+			rr.icon = repoIcon
+			rr.rev = rev
+			results = append(results, rr)
 		}
 	}
-
-	return results, &streaming.Stats{
-		IsLimitHit: limitHit,
-	}, nil
+	return results
 }
 
-func matchRepos(pattern *regexp.Regexp, resolved []*search.RepositoryRevisions) []*search.RepositoryRevisions {
+func matchRepos(pattern *regexp.Regexp, resolved []*search.RepositoryRevisions, results chan<- []*search.RepositoryRevisions) {
 	/*
 		Local benchmarks showed diminishing returns for higher levels of concurrency.
 		5 workers seems to be a good trade-off for now. We might want to revisit this
@@ -129,38 +154,36 @@ func matchRepos(pattern *regexp.Regexp, resolved []*search.RepositoryRevisions) 
 		step += 1
 	}
 
-	results := make(chan []*search.RepositoryRevisions)
-	workers := 0
+	var wg sync.WaitGroup
 	offset := 0
 	for offset < len(resolved) {
 		next := offset + step
 		if next > len(resolved) {
 			next = len(resolved)
 		}
-		workers++
+		wg.Add(1)
 		go func(repos []*search.RepositoryRevisions) {
+			defer wg.Done()
+
 			var matched []*search.RepositoryRevisions
 			for _, r := range repos {
 				if pattern.MatchString(string(r.Repo.Name)) {
 					matched = append(matched, r)
 				}
 			}
-			results <- matched
+			if len(matched) > 0 {
+				results <- matched
+			}
 		}(resolved[offset:next])
 		offset = next
 	}
 
-	var matched []*search.RepositoryRevisions
-	for w := 0; w < workers; w++ {
-		matched = append(matched, <-results...)
-	}
-
-	return matched
+	wg.Wait()
 }
 
 // reposToAdd determines which repositories should be included in the result set based on whether they fit in the subset
 // of repostiories specified in the query's `repohasfile` and `-repohasfile` fields if they exist.
-func reposToAdd(ctx context.Context, args *search.TextParameters, repos []*search.RepositoryRevisions) ([]*search.RepositoryRevisions, error) {
+func reposToAdd(ctx context.Context, db dbutil.DB, args *search.TextParameters, repos []*search.RepositoryRevisions) ([]*search.RepositoryRevisions, error) {
 	matchingIDs := make(map[api.RepoID]bool)
 	if len(args.PatternInfo.FilePatternsReposMustInclude) > 0 {
 		for _, pattern := range args.PatternInfo.FilePatternsReposMustInclude {
@@ -177,7 +200,7 @@ func reposToAdd(ctx context.Context, args *search.TextParameters, repos []*searc
 			newArgs.RepoPromise = (&search.Promise{}).Resolve(repos)
 			newArgs.Query = q
 			newArgs.UseFullDeadline = true
-			matches, _, err := searchFilesInReposBatch(ctx, &newArgs)
+			matches, _, err := searchFilesInReposBatch(ctx, db, &newArgs)
 			if err != nil {
 				return nil, err
 			}
@@ -205,7 +228,7 @@ func reposToAdd(ctx context.Context, args *search.TextParameters, repos []*searc
 			newArgs.RepoPromise = rp
 			newArgs.Query = q
 			newArgs.UseFullDeadline = true
-			matches, _, err := searchFilesInReposBatch(ctx, &newArgs)
+			matches, _, err := searchFilesInReposBatch(ctx, db, &newArgs)
 			if err != nil {
 				return nil, err
 			}

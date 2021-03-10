@@ -67,12 +67,6 @@
             }
           }
         },
-        "automation": {
-          "description": "DEPRECATED: Enables the experimental code change management campaigns feature. This field has been deprecated in favour of campaigns.enabled",
-          "type": "string",
-          "enum": ["enabled", "disabled"],
-          "default": "enabled"
-        },
         "structuralSearch": {
           "description": "Enables structural search.",
           "type": "string",
@@ -259,29 +253,32 @@
       ],
       "group": "Experimental"
     },
-    "automation.readAccess.enabled": {
-      "description": "DEPRECATED: The automation feature was renamed to campaigns. Use `campaigns.readAccess.enabled` instead.",
-      "type": "boolean",
-      "!go": { "pointer": true },
-      "group": "Campaigns"
-    },
     "campaigns.enabled": {
-      "description": "Enables/disables the campaigns feature.",
+      "description": "DEPRECATED: Use batchChanges.enabled instead. Enables/disables the campaigns feature.",
       "type": "boolean",
       "!go": { "pointer": true },
       "group": "Campaigns",
       "default": true
     },
-    "campaigns.readAccess.enabled": {
-      "description": "DEPRECATED: Enables read-only access to campaigns for non-site-admin users. This doesn't have an effect anymore.",
+    "campaigns.restrictToAdmins": {
+      "description": "DEPRECATED: Use batchChanges.restrictToAdmins instead. When enabled, only site admins can create and apply campaigns.",
       "type": "boolean",
       "!go": { "pointer": true },
-      "group": "Campaigns"
-    },
-    "campaigns.restrictToAdmins": {
-      "description": "When enabled, only site admins can create and apply campaigns.",
-      "type": "boolean",
       "group": "Campaigns",
+      "default": false
+    },
+    "batchChanges.enabled": {
+      "description": "Enables/disables the Batch Changes feature.",
+      "type": "boolean",
+      "!go": { "pointer": true },
+      "group": "BatchChanges",
+      "default": true
+    },
+    "batchChanges.restrictToAdmins": {
+      "description": "When enabled, only site admins can create and apply batch changes.",
+      "type": "boolean",
+      "!go": { "pointer": true },
+      "group": "BatchChanges",
       "default": false
     },
     "codeIntelAutoIndexing.enabled": {
@@ -885,6 +882,68 @@
       "type": "integer",
       "default": 2000,
       "group": "Misc."
+    },
+    "productResearchPage.enabled": {
+      "description": "Enables users access to the product research page in their settings.",
+      "type": "boolean",
+      "!go": { "pointer": true },
+      "group": "Misc.",
+      "default": true
+    },
+    "encryption.keys": {
+      "description": "Configuration for encryption keys used to encrypt data at rest in the database.",
+      "type": "object",
+      "properties": {
+        "externalServiceKey": {
+          "$ref": "#/definitions/EncryptionKey"
+        }
+      }
+    },
+    "api.ratelimit": {
+      "description": "Configuration for API rate limiting",
+      "type": "object",
+      "required": ["enabled", "perUser", "perIP"],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether API rate limiting is enabled"
+        },
+        "perUser": {
+          "description": "Limit granted per user per hour",
+          "type": "integer",
+          "minimum": 1,
+          "default": 1000000
+        },
+        "perIP": {
+          "description": "Limit granted per IP per hour, only applied to anonymous users",
+          "type": "integer",
+          "minimum": 1,
+          "default": 1000000
+        },
+        "overrides": {
+          "description": "An array of rate limit overrides",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "description": "The key that we want to override for example a username",
+                "type": "string",
+                "minLength": 1
+              },
+              "limit": {
+                "description": "The limit per hour, 'unlimited' or 'blocked'",
+                "oneOf": [
+                  { "type": "string", "const": "unlimited" },
+                  { "type": "string", "const": "blocked" },
+                  { "type": "integer", "minimum": 1 }
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   },
   "definitions": {
@@ -1030,6 +1089,11 @@
           "description": "Whether the Service Provider should (insecurely) accept assertions from the Identity Provider without a valid signature.",
           "type": "boolean",
           "default": false
+        },
+        "allowSignup": {
+          "description": "Allows new visitors to sign up for accounts via SAML authentication. If false, users signing in via SAML must have an existing Sourcegraph account, which will be linked to their SAML identity after sign-in.",
+          "type": "boolean",
+          "!go": { "pointer": true }
         }
       }
     },
@@ -1216,7 +1280,7 @@
     "NotifierOpsGenie": {
       "description": "OpsGenie notifier",
       "type": "object",
-      "required": ["type", "apiKey"],
+      "required": ["type"],
       "properties": {
         "type": {
           "type": "string",
@@ -1248,6 +1312,46 @@
               { "required": ["type", "username"] }
             ]
           }
+        }
+      }
+    },
+    "EncryptionKey": {
+      "description": "Config for a key",
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["cloudkms", "noop"]
+        }
+      },
+      "oneOf": [{ "$ref": "#/definitions/CloudKMSEncryptionKey" }, { "$ref": "#/definitions/NoOpEncryptionKey" }],
+      "!go": {
+        "taggedUnionType": true
+      }
+    },
+    "CloudKMSEncryptionKey": {
+      "description": "Google Cloud KMS Encryption Key, used to encrypt data in Google Cloud environments",
+      "type": "object",
+      "required": ["type", "keyname"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "cloudkms"
+        },
+        "keyname": {
+          "type": "string"
+        }
+      }
+    },
+    "NoOpEncryptionKey": {
+      "description": "This encryption key is a no op, leaving your data in plaintext (not recommended).",
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "noop"
         }
       }
     }

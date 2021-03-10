@@ -28,6 +28,7 @@ import { TelemetryProps } from '../../../shared/src/telemetry/telemetryService'
 import { BrandLogo } from '../components/branding/BrandLogo'
 import { LinkOrSpan } from '../../../shared/src/components/LinkOrSpan'
 import { ExtensionAlertAnimationProps } from './UserNavItem'
+import { LayoutRouteProps } from '../routes'
 
 interface Props
     extends SettingsCascadeProps,
@@ -54,7 +55,8 @@ interface Props
     onNavbarQueryChange: (queryState: QueryState) => void
     isSourcegraphDotCom: boolean
     isSearchRelatedPage: boolean
-    showCampaigns: boolean
+    showBatchChanges: boolean
+    routes: readonly LayoutRouteProps<{}>[]
 
     // Whether globbing is enabled for filters.
     globbing: boolean
@@ -181,6 +183,7 @@ export const GlobalNavbar: React.FunctionComponent<Props> = ({
                                 versionContext={versionContext}
                                 setVersionContext={setVersionContext}
                                 availableVersionContexts={availableVersionContexts}
+                                selectedSearchContextSpec={props.selectedSearchContextSpec}
                             />
                             <SearchNavbarItem
                                 {...props}

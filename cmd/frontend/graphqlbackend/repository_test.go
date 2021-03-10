@@ -8,9 +8,12 @@ import (
 
 	"github.com/graph-gophers/graphql-go/gqltesting"
 
+	"github.com/hexops/autogold"
+
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbtesting"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/internal/vcs/git"
@@ -55,6 +58,7 @@ func TestRepository_Commit(t *testing.T) {
 }
 
 func TestRepositoryHydration(t *testing.T) {
+	db := new(dbtesting.MockDB)
 	makeRepos := func() (*types.Repo, *types.Repo) {
 		const id = 42
 		name := fmt.Sprintf("repo-%d", id)
@@ -86,7 +90,7 @@ func TestRepositoryHydration(t *testing.T) {
 		}
 		defer func() { database.Mocks = database.MockStores{} }()
 
-		repoResolver := &RepositoryResolver{innerRepo: minimalRepo}
+		repoResolver := NewRepositoryResolver(db, minimalRepo)
 		assertRepoResolverHydrated(ctx, t, repoResolver, hydratedRepo)
 	})
 
@@ -100,7 +104,7 @@ func TestRepositoryHydration(t *testing.T) {
 		}
 		defer func() { database.Mocks = database.MockStores{} }()
 
-		repoResolver := &RepositoryResolver{innerRepo: minimalRepo}
+		repoResolver := NewRepositoryResolver(db, minimalRepo)
 		_, err := repoResolver.Description(ctx)
 		if err == nil {
 			t.Fatal("err is unexpected nil")
@@ -142,4 +146,18 @@ func assertRepoResolverHydrated(ctx context.Context, t *testing.T, r *Repository
 	if uri != hydrated.URI {
 		t.Fatalf("wrong URI. want=%q, have=%q", hydrated.URI, uri)
 	}
+}
+
+func TestRepositoryLabel(t *testing.T) {
+	test := func(name string) string {
+		r := &RepositoryResolver{
+			name: api.RepoName(name),
+			id:   api.RepoID(0),
+		}
+		result, _ := r.Label()
+		return result.HTML()
+	}
+
+	autogold.Want("encodes spaces for URL in HTML", `<p><a href="/repo%20with%20spaces" rel="nofollow">repo with spaces</a></p>
+`).Equal(t, test("repo with spaces"))
 }

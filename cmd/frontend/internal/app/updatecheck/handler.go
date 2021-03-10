@@ -18,10 +18,10 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/app/tracking"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/hubspot"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/hubspot/hubspotutil"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/env"
-	"github.com/sourcegraph/sourcegraph/internal/hubspot"
 	"github.com/sourcegraph/sourcegraph/internal/lazyregexp"
 	"github.com/sourcegraph/sourcegraph/internal/pubsub"
 	"github.com/sourcegraph/sourcegraph/internal/types"
@@ -35,17 +35,17 @@ var (
 	// non-cluster, non-docker-compose, and non-pure-docker installations what the latest
 	//version is. The version here _must_ be available at https://hub.docker.com/r/sourcegraph/server/tags/
 	// before landing in master.
-	latestReleaseDockerServerImageBuild = newBuild("3.24.1")
+	latestReleaseDockerServerImageBuild = newBuild("3.25.2")
 
 	// latestReleaseKubernetesBuild is only used by sourcegraph.com to tell existing Sourcegraph
 	// cluster deployments what the latest version is. The version here _must_ be available in
 	// a tag at https://github.com/sourcegraph/deploy-sourcegraph before landing in master.
-	latestReleaseKubernetesBuild = newBuild("3.24.1")
+	latestReleaseKubernetesBuild = newBuild("3.25.2")
 
 	// latestReleaseDockerComposeOrPureDocker is only used by sourcegraph.com to tell existing Sourcegraph
 	// Docker Compose or Pure Docker deployments what the latest version is. The version here _must_ be
 	// available in a tag at https://github.com/sourcegraph/deploy-sourcegraph-docker before landing in master.
-	latestReleaseDockerComposeOrPureDocker = newBuild("3.24.1")
+	latestReleaseDockerComposeOrPureDocker = newBuild("3.25.2")
 )
 
 func getLatestRelease(deployType string) build {
@@ -187,6 +187,8 @@ type pingRequest struct {
 	CodeIntelUsage       json.RawMessage `json:"codeIntelUsage"`
 	NewCodeIntelUsage    json.RawMessage `json:"newCodeIntelUsage"`
 	SearchUsage          json.RawMessage `json:"searchUsage"`
+	ExtensionsUsage      json.RawMessage `json:"extensionsUsage"`
+	CodeInsightsUsage    json.RawMessage `json:"codeInsightsUsage"`
 	InitialAdminEmail    string          `json:"initAdmin"`
 	TotalUsers           int32           `json:"totalUsers"`
 	HasRepos             bool            `json:"repos"`
@@ -288,6 +290,8 @@ type pingPayload struct {
 	Repositories         json.RawMessage `json:"repositories"`
 	SearchOnboarding     json.RawMessage `json:"search_onboarding"`
 	DependencyVersions   json.RawMessage `json:"dependency_versions"`
+	ExtensionsUsage      json.RawMessage `json:"extensions_usage"`
+	CodeInsightsUsage    json.RawMessage `json:"code_insights_usage"`
 	InstallerEmail       string          `json:"installer_email"`
 	AuthProviders        string          `json:"auth_providers"`
 	ExtServices          string          `json:"ext_services"`
@@ -336,7 +340,7 @@ func logPing(r *http.Request, pr *pingRequest, hasUpdate bool) {
 		now := time.Now().UTC()
 		rounded := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 		millis := rounded.UnixNano() / (int64(time.Millisecond) / int64(time.Nanosecond))
-		go tracking.SyncUser(pr.InitialAdminEmail, "", &hubspot.ContactProperties{IsServerAdmin: true, LatestPing: millis})
+		go hubspotutil.SyncUser(pr.InitialAdminEmail, "", &hubspot.ContactProperties{IsServerAdmin: true, LatestPing: millis})
 	}
 }
 
@@ -370,6 +374,8 @@ func marshalPing(pr *pingRequest, hasUpdate bool, clientAddr string, now time.Ti
 		SearchOnboarding:     pr.SearchOnboarding,
 		InstallerEmail:       pr.InitialAdminEmail,
 		DependencyVersions:   pr.DependencyVersions,
+		ExtensionsUsage:      pr.ExtensionsUsage,
+		CodeInsightsUsage:    pr.CodeInsightsUsage,
 		AuthProviders:        strings.Join(pr.AuthProviders, ","),
 		ExtServices:          strings.Join(pr.ExternalServices, ","),
 		BuiltinSignupAllowed: strconv.FormatBool(pr.BuiltinSignupAllowed),
@@ -411,9 +417,14 @@ func reserializeNewCodeIntelUsage(payload json.RawMessage) (json.RawMessage, err
 	}
 
 	return json.Marshal(jsonCodeIntelUsage{
-		StartOfWeek:    codeIntelUsage.StartOfWeek,
-		WAUs:           &codeIntelUsage.WAUs,
-		EventSummaries: eventSummaries,
+		StartOfWeek:                    codeIntelUsage.StartOfWeek,
+		WAUs:                           codeIntelUsage.WAUs,
+		PreciseWAUs:                    codeIntelUsage.PreciseWAUs,
+		SearchBasedWAUs:                codeIntelUsage.SearchBasedWAUs,
+		CrossRepositoryWAUs:            codeIntelUsage.CrossRepositoryWAUs,
+		PreciseCrossRepositoryWAUs:     codeIntelUsage.PreciseCrossRepositoryWAUs,
+		SearchBasedCrossRepositoryWAUs: codeIntelUsage.SearchBasedCrossRepositoryWAUs,
+		EventSummaries:                 eventSummaries,
 	})
 }
 
@@ -439,8 +450,13 @@ func reserializeOldCodeIntelUsage(payload json.RawMessage) (json.RawMessage, err
 	references := week.References
 
 	return json.Marshal(jsonCodeIntelUsage{
-		StartOfWeek: week.StartTime,
-		WAUs:        nil,
+		StartOfWeek:                    week.StartTime,
+		WAUs:                           nil,
+		PreciseWAUs:                    nil,
+		SearchBasedWAUs:                nil,
+		CrossRepositoryWAUs:            nil,
+		PreciseCrossRepositoryWAUs:     nil,
+		SearchBasedCrossRepositoryWAUs: nil,
 		EventSummaries: []jsonEventSummary{
 			{Action: "hover", Source: "precise", WAUs: hover.LSIF.UsersCount, TotalActions: unwrap(hover.LSIF.EventsCount)},
 			{Action: "hover", Source: "search", WAUs: hover.Search.UsersCount, TotalActions: unwrap(hover.Search.EventsCount)},
@@ -453,9 +469,14 @@ func reserializeOldCodeIntelUsage(payload json.RawMessage) (json.RawMessage, err
 }
 
 type jsonCodeIntelUsage struct {
-	StartOfWeek    time.Time          `json:"start_time"`
-	WAUs           *int32             `json:"waus"`
-	EventSummaries []jsonEventSummary `json:"event_summaries"`
+	StartOfWeek                    time.Time          `json:"start_time"`
+	WAUs                           *int32             `json:"waus"`
+	PreciseWAUs                    *int32             `json:"precise_waus"`
+	SearchBasedWAUs                *int32             `json:"search_waus"`
+	CrossRepositoryWAUs            *int32             `json:"xrepo_waus"`
+	PreciseCrossRepositoryWAUs     *int32             `json:"precise_xrepo_waus"`
+	SearchBasedCrossRepositoryWAUs *int32             `json:"search_xrepo_waus"`
+	EventSummaries                 []jsonEventSummary `json:"event_summaries"`
 }
 
 type jsonEventSummary struct {

@@ -17,9 +17,11 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbtesting"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbutil"
 	"github.com/sourcegraph/sourcegraph/internal/search"
 	"github.com/sourcegraph/sourcegraph/internal/search/query"
-	querytypes "github.com/sourcegraph/sourcegraph/internal/search/query/types"
+	"github.com/sourcegraph/sourcegraph/internal/search/result"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/internal/vcs/git"
 	"github.com/sourcegraph/sourcegraph/schema"
@@ -94,9 +96,10 @@ func TestSearch(t *testing.T) {
 			mockDecodedViewerFinalSettings = &schema.Settings{}
 			defer func() { mockDecodedViewerFinalSettings = nil }()
 
+			db := new(dbtesting.MockDB)
 			database.Mocks.Repos.List = tc.reposListMock
-			sr := &schemaResolver{}
-			schema, err := graphql.ParseSchema(Schema, sr, graphql.Tracer(prometheusTracer{}))
+			sr := &schemaResolver{db: db}
+			schema, err := graphql.ParseSchema(Schema, sr, graphql.Tracer(&prometheusTracer{db: db}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -239,19 +242,21 @@ var testSearchGQLQuery = `
 		}
 `
 
-func testStringResult(result *searchSuggestionResolver) string {
+func testStringResult(result SearchSuggestionResolver) string {
 	var name string
-	switch r := result.result.(type) {
-	case *RepositoryResolver:
-		name = "repo:" + r.Name()
-	case *GitTreeEntryResolver:
-		name = "file:" + r.Path()
-	case *languageResolver:
-		name = "lang:" + r.name
+	switch r := result.(type) {
+	case repositorySuggestionResolver:
+		name = "repo:" + r.repo.Name()
+	case gitTreeSuggestionResolver:
+		name = "file:" + r.gitTreeEntry.Path()
+	case languageSuggestionResolver:
+		name = "lang:" + r.lang.name
+	case symbolSuggestionResolver:
+		name = "symbol:" + r.symbol.Symbol.Name
 	default:
 		panic("never here")
 	}
-	if result.score == 0 {
+	if result.Score() == 0 {
 		return "<removed>"
 	}
 	return name
@@ -336,20 +341,22 @@ func TestExactlyOneRepo(t *testing.T) {
 }
 
 func TestQuoteSuggestions(t *testing.T) {
+	db := new(dbtesting.MockDB)
+
 	t.Run("regex error", func(t *testing.T) {
 		raw := "*"
 		_, err := query.ParseRegexp(raw)
 		if err == nil {
 			t.Fatalf("error returned from query.ParseRegexp(%q) is nil", raw)
 		}
-		alert := alertForQuery(raw, err)
+		alert := alertForQuery(db, raw, err)
 		if !strings.Contains(alert.description, "regexp") {
 			t.Errorf("description is '%s', want it to contain 'regexp'", alert.description)
 		}
 	})
 }
 
-func TestEueryForStableResults(t *testing.T) {
+func TestQueryForStableResults(t *testing.T) {
 	cases := []struct {
 		query           string
 		wantStableCount int32
@@ -370,7 +377,7 @@ func TestEueryForStableResults(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run("query for stable results", func(t *testing.T) {
-			queryInfo, _ := query.Process(c.query, query.SearchTypeLiteral)
+			queryInfo, _ := query.ParseLiteral(c.query)
 			args, queryInfo, err := queryForStableResults(&SearchArgs{}, queryInfo)
 			if err != nil {
 				if !reflect.DeepEqual(err, c.wantError) {
@@ -383,7 +390,7 @@ func TestEueryForStableResults(t *testing.T) {
 			}
 			// Ensure type:file is set.
 			fileValue := "file"
-			wantTypeValue := querytypes.Value{String: &fileValue}
+			wantTypeValue := query.Value{String: &fileValue}
 			gotTypeValues := queryInfo.Fields()["type"]
 			if len(gotTypeValues) != 1 && *gotTypeValues[0] != wantTypeValue {
 				t.Errorf("Query %s sets stable:yes but is not transformed with type:file.", c.query)
@@ -393,6 +400,8 @@ func TestEueryForStableResults(t *testing.T) {
 }
 
 func TestVersionContext(t *testing.T) {
+	db := new(dbtesting.MockDB)
+
 	conf.Mock(&conf.Unified{
 		SiteConfiguration: schema.SiteConfiguration{
 			ExperimentalFeatures: &schema.ExperimentalFeatures{
@@ -506,6 +515,7 @@ func TestVersionContext(t *testing.T) {
 			}
 
 			resolver := searchResolver{
+				db: db,
 				SearchInputs: &SearchInputs{
 					Query:          q,
 					VersionContext: &tc.versionContext,
@@ -542,22 +552,22 @@ func TestVersionContext(t *testing.T) {
 	}
 }
 
-func mkFileMatch(repo *types.RepoName, path string, lineNumbers ...int32) *FileMatchResolver {
+func mkFileMatch(db dbutil.DB, repo *types.RepoName, path string, lineNumbers ...int32) *FileMatchResolver {
 	if repo == nil {
 		repo = &types.RepoName{
 			ID:   1,
 			Name: "repo",
 		}
 	}
-	var lines []*lineMatch
+	var lines []*result.LineMatch
 	for _, n := range lineNumbers {
-		lines = append(lines, &lineMatch{JLineNumber: n})
+		lines = append(lines, &result.LineMatch{LineNumber: n})
 	}
-	return mkFileMatchResolver(FileMatch{
-		uri:          fileMatchURI(repo.Name, "", path),
-		JPath:        path,
-		JLineMatches: lines,
-		Repo:         repo,
+	return mkFileMatchResolver(db, result.FileMatch{
+		URI:         fileMatchURI(repo.Name, "", path),
+		Path:        path,
+		LineMatches: lines,
+		Repo:        repo,
 	})
 }
 

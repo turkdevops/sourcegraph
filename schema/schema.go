@@ -52,6 +52,18 @@ type AdditionalProperties struct {
 	Value string `json:"value"`
 }
 
+// ApiRatelimit description: Configuration for API rate limiting
+type ApiRatelimit struct {
+	// Enabled description: Whether API rate limiting is enabled
+	Enabled bool `json:"enabled"`
+	// Overrides description: An array of rate limit overrides
+	Overrides []*Overrides `json:"overrides,omitempty"`
+	// PerIP description: Limit granted per IP per hour, only applied to anonymous users
+	PerIP int `json:"perIP"`
+	// PerUser description: Limit granted per user per hour
+	PerUser int `json:"perUser"`
+}
+
 // AuthAccessTokens description: Settings for access tokens, which enable external tools to access the Sourcegraph API with the privileges of the user.
 type AuthAccessTokens struct {
 	// Allow description: Allow or restrict the use of access tokens. The default is "all-users-create", which enables all users to create access tokens. Use "none" to disable access tokens entirely. Use "site-admin-create" to restrict creation of new tokens to admin users (existing tokens will still work until revoked).
@@ -115,6 +127,26 @@ func (v *AuthProviders) UnmarshalJSON(data []byte) error {
 		return json.Unmarshal(data, &v.Saml)
 	}
 	return fmt.Errorf("tagged union type must have a %q property whose value is one of %s", "type", []string{"builtin", "saml", "openidconnect", "http-header", "github", "gitlab"})
+}
+
+// BatchSpec description: A batch specification, which describes the batch change and what kinds of changes to make (or what existing changesets to track).
+type BatchSpec struct {
+	// ChangesetTemplate description: A template describing how to create (and update) changesets with the file changes produced by the command steps.
+	ChangesetTemplate *ChangesetTemplate `json:"changesetTemplate,omitempty"`
+	// Description description: The description of the batch change.
+	Description string `json:"description,omitempty"`
+	// ImportChangesets description: Import existing changesets on code hosts.
+	ImportChangesets []*ImportChangesets `json:"importChangesets,omitempty"`
+	// Name description: The name of the batch change, which is unique among all batch changes in the namespace. A batch change's name is case-preserving.
+	Name string `json:"name"`
+	// On description: The set of repositories (and branches) to run the batch change on, specified as a list of search queries (that match repositories) and/or specific repositories.
+	On []interface{} `json:"on,omitempty"`
+	// Steps description: The sequence of commands to run (for each repository branch matched in the `on` property) to produce the workspace changes that will be included in the batch change.
+	Steps []*Step `json:"steps,omitempty"`
+	// TransformChanges description: Optional transformations to apply to the changes produced in each repository.
+	TransformChanges *TransformChanges `json:"transformChanges,omitempty"`
+	// Workspaces description: Individual workspace configurations for one or more repositories that define which workspaces to use for the execution of steps in the repositories.
+	Workspaces []*WorkspaceConfiguration `json:"workspaces,omitempty"`
 }
 
 // BitbucketCloudConnection description: Configuration for a connection to Bitbucket Cloud.
@@ -211,7 +243,7 @@ type BitbucketServerConnection struct {
 	//
 	// The special string "none" can be used as the only element to disable this feature. Repositories matched by multiple query strings are only imported once. Here's the official Bitbucket Server documentation about which query string parameters are valid: https://docs.atlassian.com/bitbucket-server/rest/6.1.2/bitbucket-rest.html#idp355
 	RepositoryQuery []string `json:"repositoryQuery,omitempty"`
-	// Token description: A Bitbucket Server personal access token with Read permissions. When using campaigns, the token needs Write permissions. Create one at https://[your-bitbucket-hostname]/plugins/servlet/access-tokens/add. Also set the corresponding "username" field.
+	// Token description: A Bitbucket Server personal access token with Read permissions. When using batch changes, the token needs Write permissions. Create one at https://[your-bitbucket-hostname]/plugins/servlet/access-tokens/add. Also set the corresponding "username" field.
 	//
 	// For Bitbucket Server instances that don't support personal access tokens (Bitbucket Server version 5.4 and older), specify user-password credentials in the "username" and "password" fields.
 	Token string `json:"token,omitempty"`
@@ -309,26 +341,6 @@ type BuiltinAuthProvider struct {
 	Type        string `json:"type"`
 }
 
-// CampaignSpec description: A campaign specification, which describes the campaign and what kinds of changes to make (or what existing changesets to track).
-type CampaignSpec struct {
-	// ChangesetTemplate description: A template describing how to create (and update) changesets with the file changes produced by the command steps.
-	ChangesetTemplate *ChangesetTemplate `json:"changesetTemplate,omitempty"`
-	// Description description: The description of the campaign.
-	Description string `json:"description,omitempty"`
-	// ImportChangesets description: Import existing changesets on code hosts.
-	ImportChangesets []*ImportChangesets `json:"importChangesets,omitempty"`
-	// Name description: The name of the campaign, which is unique among all campaigns in the namespace. A campaign's name is case-preserving.
-	Name string `json:"name"`
-	// On description: The set of repositories (and branches) to run the campaign on, specified as a list of search queries (that match repositories) and/or specific repositories.
-	On []interface{} `json:"on,omitempty"`
-	// Steps description: The sequence of commands to run (for each repository branch matched in the `on` property) to produce the campaign's changes.
-	Steps []*Step `json:"steps,omitempty"`
-	// TransformChanges description: Optional transformations to apply to the changes produced in each repository.
-	TransformChanges *TransformChanges `json:"transformChanges,omitempty"`
-	// Workspaces description: Individual workspace configurations for one or more repositories that define which workspaces to use for the execution of steps in the repositories.
-	Workspaces []*WorkspaceConfiguration `json:"workspaces,omitempty"`
-}
-
 // ChangesetTemplate description: A template describing how to create (and update) changesets with the file changes produced by the command steps.
 type ChangesetTemplate struct {
 	// Body description: The body (description) of the changeset.
@@ -337,7 +349,7 @@ type ChangesetTemplate struct {
 	Branch string `json:"branch"`
 	// Commit description: The Git commit to create with the changes.
 	Commit ExpandedGitCommitDescription `json:"commit"`
-	// Published description: Whether to publish the changeset. An unpublished changeset can be previewed on Sourcegraph by any person who can view the campaign, but its commit, branch, and pull request aren't created on the code host. A published changeset results in a commit, branch, and pull request being created on the code host.
+	// Published description: Whether to publish the changeset. An unpublished changeset can be previewed on Sourcegraph by any person who can view the batch change, but its commit, branch, and pull request aren't created on the code host. A published changeset results in a commit, branch, and pull request being created on the code host.
 	Published interface{} `json:"published"`
 	// Title description: The title of the changeset.
 	Title string `json:"title"`
@@ -349,6 +361,12 @@ type CloneURLToRepositoryName struct {
 	From string `json:"from"`
 	// To description: The repository name output pattern. This should use `{matchGroup}` syntax to reference the capturing groups from the `from` field.
 	To string `json:"to"`
+}
+
+// CloudKMSEncryptionKey description: Google Cloud KMS Encryption Key, used to encrypt data in Google Cloud environments
+type CloudKMSEncryptionKey struct {
+	Keyname string `json:"keyname"`
+	Type    string `json:"type"`
 }
 
 // CustomGitFetchMapping description: Mapping from Git clone URl domain/path to git fetch command. The `domainPath` field contains the Git clone URL domain/path part. The `fetch` field contains the custom git fetch command.
@@ -369,6 +387,42 @@ type DebugLog struct {
 type Dotcom struct {
 	// SlackLicenseExpirationWebhook description: Slack webhook for upcoming license expiration notifications.
 	SlackLicenseExpirationWebhook string `json:"slackLicenseExpirationWebhook,omitempty"`
+}
+
+// EncryptionKey description: Config for a key
+type EncryptionKey struct {
+	Cloudkms *CloudKMSEncryptionKey
+	Noop     *NoOpEncryptionKey
+}
+
+func (v EncryptionKey) MarshalJSON() ([]byte, error) {
+	if v.Cloudkms != nil {
+		return json.Marshal(v.Cloudkms)
+	}
+	if v.Noop != nil {
+		return json.Marshal(v.Noop)
+	}
+	return nil, errors.New("tagged union type must have exactly 1 non-nil field value")
+}
+func (v *EncryptionKey) UnmarshalJSON(data []byte) error {
+	var d struct {
+		DiscriminantProperty string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &d); err != nil {
+		return err
+	}
+	switch d.DiscriminantProperty {
+	case "cloudkms":
+		return json.Unmarshal(data, &v.Cloudkms)
+	case "noop":
+		return json.Unmarshal(data, &v.Noop)
+	}
+	return fmt.Errorf("tagged union type must have a %q property whose value is one of %s", "type", []string{"cloudkms", "noop"})
+}
+
+// EncryptionKeys description: Configuration for encryption keys used to encrypt data at rest in the database.
+type EncryptionKeys struct {
+	ExternalServiceKey *EncryptionKey `json:"externalServiceKey,omitempty"`
 }
 type ExcludedAWSCodeCommitRepo struct {
 	// Id description: The ID of an AWS Code Commit repository (as returned by the AWS API) to exclude from mirroring. Use this to exclude the repository, even if renamed, or to differentiate between repositories with the same name in multiple regions.
@@ -429,8 +483,6 @@ type ExpandedGitCommitDescription struct {
 type ExperimentalFeatures struct {
 	// AndOrQuery description: DEPRECATED: Interpret a search input query as an and/or query.
 	AndOrQuery string `json:"andOrQuery,omitempty"`
-	// Automation description: DEPRECATED: Enables the experimental code change management campaigns feature. This field has been deprecated in favour of campaigns.enabled
-	Automation string `json:"automation,omitempty"`
 	// BitbucketServerFastPerm description: DEPRECATED: Configure in Bitbucket Server config.
 	BitbucketServerFastPerm string `json:"bitbucketServerFastPerm,omitempty"`
 	// CustomGitFetch description: JSON array of configuration that maps from Git clone URL domain/path to custom git fetch command.
@@ -522,6 +574,8 @@ type GitHubConnection struct {
 	Authorization *GitHubAuthorization `json:"authorization,omitempty"`
 	// Certificate description: TLS certificate of the GitHub Enterprise instance. This is only necessary if the certificate is self-signed or signed by an internal CA. To get the certificate run `openssl s_client -connect HOST:443 -showcerts < /dev/null 2> /dev/null | openssl x509 -outform PEM`. To escape the value into a JSON string, you may want to use a tool like https://json-escape-text.now.sh.
 	Certificate string `json:"certificate,omitempty"`
+	// CloudDefault description: Only to be used in development to override the cloud_default column
+	CloudDefault bool `json:"cloudDefault,omitempty"`
 	// CloudGlobal description: When set to true, this external service will be chosen as our 'Global' GitHub service. Only valid on Sourcegraph.com. Only one service can have this flag set.
 	CloudGlobal bool `json:"cloudGlobal,omitempty"`
 	// Exclude description: A list of repositories to never mirror from this GitHub instance. Takes precedence over "orgs", "repos", and "repositoryQuery" configuration.
@@ -613,6 +667,8 @@ type GitLabConnection struct {
 	Authorization *GitLabAuthorization `json:"authorization,omitempty"`
 	// Certificate description: TLS certificate of the GitLab instance. This is only necessary if the certificate is self-signed or signed by an internal CA. To get the certificate run `openssl s_client -connect HOST:443 -showcerts < /dev/null 2> /dev/null | openssl x509 -outform PEM`. To escape the value into a JSON string, you may want to use a tool like https://json-escape-text.now.sh.
 	Certificate string `json:"certificate,omitempty"`
+	// CloudDefault description: Only to be used in development to override the cloud_default column
+	CloudDefault bool `json:"cloudDefault,omitempty"`
 	// CloudGlobal description: When set to true, this external service will be chosen as our 'Global' GitLab service. Only valid on Sourcegraph.com. Only one service can have this flag set.
 	CloudGlobal bool `json:"cloudGlobal,omitempty"`
 	// Exclude description: A list of projects to never mirror from this GitLab instance. Takes precedence over "projects" and "projectQuery" configuration. Supports excluding by name ({"name": "group/name"}) or by ID ({"id": 42}).
@@ -765,6 +821,11 @@ type Log struct {
 	// Sentry description: Configuration for Sentry
 	Sentry *Sentry `json:"sentry,omitempty"`
 }
+
+// NoOpEncryptionKey description: This encryption key is a no op, leaving your data in plaintext (not recommended).
+type NoOpEncryptionKey struct {
+	Type string `json:"type"`
+}
 type Notice struct {
 	// Dismissible description: Whether this notice can be dismissed (closed) by the user.
 	Dismissible bool `json:"dismissible,omitempty"`
@@ -830,7 +891,7 @@ type NotifierEmail struct {
 
 // NotifierOpsGenie description: OpsGenie notifier
 type NotifierOpsGenie struct {
-	ApiKey   string `json:"apiKey"`
+	ApiKey   string `json:"apiKey,omitempty"`
 	ApiUrl   string `json:"apiUrl,omitempty"`
 	Priority string `json:"priority,omitempty"`
 	// Responders description: List of responders responsible for notifications.
@@ -892,13 +953,13 @@ type ObservabilityTracing struct {
 	Sampling string `json:"sampling,omitempty"`
 }
 
-// OnQuery description: A Sourcegraph search query that matches a set of repositories (and branches). Each matched repository branch is added to the list of repositories that the campaign will be run on.
+// OnQuery description: A Sourcegraph search query that matches a set of repositories (and branches). Each matched repository branch is added to the list of repositories that the batch change will be run on.
 type OnQuery struct {
 	// RepositoriesMatchingQuery description: A Sourcegraph search query that matches a set of repositories (and branches). If the query matches files, symbols, or some other object inside a repository, the object's repository is included.
 	RepositoriesMatchingQuery string `json:"repositoriesMatchingQuery"`
 }
 
-// OnRepository description: A specific repository (and branch) that is added to the list of repositories that the campaign will be run on.
+// OnRepository description: A specific repository (and branch) that is added to the list of repositories that the batch change will be run on.
 type OnRepository struct {
 	// Branch description: The branch on the repository to propose changes to. If unset, the repository's default branch is used.
 	Branch string `json:"branch,omitempty"`
@@ -938,6 +999,12 @@ type OtherExternalServiceConnection struct {
 	// It is important that the Sourcegraph repository name generated with this pattern be unique to this code host. If different code hosts generate repository names that collide, Sourcegraph's behavior is undefined.
 	RepositoryPathPattern string `json:"repositoryPathPattern,omitempty"`
 	Url                   string `json:"url,omitempty"`
+}
+type Overrides struct {
+	// Key description: The key that we want to override for example a username
+	Key string `json:"key,omitempty"`
+	// Limit description: The limit per hour, 'unlimited' or 'blocked'
+	Limit interface{} `json:"limit,omitempty"`
 }
 
 // ParentSourcegraph description: URL to fetch unreachable repository details from. Defaults to "https://sourcegraph.com"
@@ -1021,6 +1088,8 @@ type Responders struct {
 //
 // Note: if you are using IdP-initiated login, you must have *at most one* SAMLAuthProvider in the `auth.providers` array.
 type SAMLAuthProvider struct {
+	// AllowSignup description: Allows new visitors to sign up for accounts via SAML authentication. If false, users signing in via SAML must have an existing Sourcegraph account, which will be linked to their SAML identity after sign-in.
+	AllowSignup *bool `json:"allowSignup,omitempty"`
 	// ConfigID description: An identifier that can be used to reference this authentication provider in other parts of the config. For example, in configuration for a code host, you may want to designate this authentication provider as the identity provider for the code host.
 	ConfigID    string `json:"configID,omitempty"`
 	DisplayName string `json:"displayName,omitempty"`
@@ -1118,7 +1187,10 @@ type Settings struct {
 	// Extensions description: The Sourcegraph extensions to use. Enable an extension by adding a property `"my/extension": true` (where `my/extension` is the extension ID). Override a previously enabled extension and disable it by setting its value to `false`.
 	Extensions map[string]bool `json:"extensions,omitempty"`
 	// Insights description: EXPERIMENTAL: Code Insights
-	Insights []*Insight `json:"insights,omitempty"`
+	Insights                            []*Insight `json:"insights,omitempty"`
+	InsightsDisplayLocationDirectory    *bool      `json:"insights.displayLocation.directory,omitempty"`
+	InsightsDisplayLocationHomepage     *bool      `json:"insights.displayLocation.homepage,omitempty"`
+	InsightsDisplayLocationInsightsPage *bool      `json:"insights.displayLocation.insightsPage,omitempty"`
 	// Motd description: DEPRECATED: Use `notices` instead.
 	//
 	// An array (often with just one element) of messages to display at the top of all pages, including for unauthenticated users. Users may dismiss a message (and any message with the same string value will remain dismissed for the user).
@@ -1195,6 +1267,8 @@ type SettingsExperimentalFeatures struct {
 
 // SiteConfiguration description: Configuration for a Sourcegraph site.
 type SiteConfiguration struct {
+	// ApiRatelimit description: Configuration for API rate limiting
+	ApiRatelimit *ApiRatelimit `json:"api.ratelimit,omitempty"`
 	// AuthAccessTokens description: Settings for access tokens, which enable external tools to access the Sourcegraph API with the privileges of the user.
 	AuthAccessTokens *AuthAccessTokens `json:"auth.accessTokens,omitempty"`
 	// AuthEnableUsernameChanges description: Enables users to change their username after account creation. Warning: setting this to be true has security implications if you have enabled (or will at any point in the future enable) repository permissions with an option that relies on username equivalency between Sourcegraph and an external service or authentication provider. Do NOT set this to true if you are using non-built-in authentication OR rely on username equivalency for repository permissions.
@@ -1223,18 +1297,18 @@ type SiteConfiguration struct {
 	AuthSessionExpiry string `json:"auth.sessionExpiry,omitempty"`
 	// AuthUserOrgMap description: Ensure that matching users are members of the specified orgs (auto-joining users to the orgs if they are not already a member). Provide a JSON object of the form `{"*": ["org1", "org2"]}`, where org1 and org2 are orgs that all users are automatically joined to. Currently the only supported key is `"*"`.
 	AuthUserOrgMap map[string][]string `json:"auth.userOrgMap,omitempty"`
-	// AutomationReadAccessEnabled description: DEPRECATED: The automation feature was renamed to campaigns. Use `campaigns.readAccess.enabled` instead.
-	AutomationReadAccessEnabled *bool `json:"automation.readAccess.enabled,omitempty"`
+	// BatchChangesEnabled description: Enables/disables the Batch Changes feature.
+	BatchChangesEnabled *bool `json:"batchChanges.enabled,omitempty"`
+	// BatchChangesRestrictToAdmins description: When enabled, only site admins can create and apply batch changes.
+	BatchChangesRestrictToAdmins *bool `json:"batchChanges.restrictToAdmins,omitempty"`
 	// Branding description: Customize Sourcegraph homepage logo and search icon.
 	//
 	// Only available in Sourcegraph Enterprise.
 	Branding *Branding `json:"branding,omitempty"`
-	// CampaignsEnabled description: Enables/disables the campaigns feature.
+	// CampaignsEnabled description: DEPRECATED: Use batchChanges.enabled instead. Enables/disables the campaigns feature.
 	CampaignsEnabled *bool `json:"campaigns.enabled,omitempty"`
-	// CampaignsReadAccessEnabled description: DEPRECATED: Enables read-only access to campaigns for non-site-admin users. This doesn't have an effect anymore.
-	CampaignsReadAccessEnabled *bool `json:"campaigns.readAccess.enabled,omitempty"`
-	// CampaignsRestrictToAdmins description: When enabled, only site admins can create and apply campaigns.
-	CampaignsRestrictToAdmins bool `json:"campaigns.restrictToAdmins,omitempty"`
+	// CampaignsRestrictToAdmins description: DEPRECATED: Use batchChanges.restrictToAdmins instead. When enabled, only site admins can create and apply campaigns.
+	CampaignsRestrictToAdmins *bool `json:"campaigns.restrictToAdmins,omitempty"`
 	// CodeIntelAutoIndexingEnabled description: Enables/disables the code intel auto indexing feature.
 	CodeIntelAutoIndexingEnabled *bool `json:"codeIntelAutoIndexing.enabled,omitempty"`
 	// CorsOrigin description: Required when using any of the native code host integrations for Phabricator, GitLab, or Bitbucket Server. It is a space-separated list of allowed origins for cross-origin HTTP requests which should be the base URL for your Phabricator, GitLab, or Bitbucket Server instance.
@@ -1257,6 +1331,8 @@ type SiteConfiguration struct {
 	EmailAddress string `json:"email.address,omitempty"`
 	// EmailSmtp description: The SMTP server used to send transactional emails (such as email verifications, reset-password emails, and notifications).
 	EmailSmtp *SMTPServerConfig `json:"email.smtp,omitempty"`
+	// EncryptionKeys description: Configuration for encryption keys used to encrypt data at rest in the database.
+	EncryptionKeys *EncryptionKeys `json:"encryption.keys,omitempty"`
 	// ExperimentalFeatures description: Experimental features to enable or disable. Features that are now enabled by default are marked as deprecated.
 	ExperimentalFeatures *ExperimentalFeatures `json:"experimentalFeatures,omitempty"`
 	// Extensions description: Configures Sourcegraph extensions.
@@ -1305,6 +1381,8 @@ type SiteConfiguration struct {
 	ParentSourcegraph *ParentSourcegraph `json:"parentSourcegraph,omitempty"`
 	// PermissionsUserMapping description: Settings for Sourcegraph permissions, which allow the site admin to explicitly manage repository permissions via the GraphQL API. This setting cannot be enabled if repository permissions for any specific external service are enabled (i.e., when the external service's `authorization` field is set).
 	PermissionsUserMapping *PermissionsUserMapping `json:"permissions.userMapping,omitempty"`
+	// ProductResearchPageEnabled description: Enables users access to the product research page in their settings.
+	ProductResearchPageEnabled *bool `json:"productResearchPage.enabled,omitempty"`
 	// RepoConcurrentExternalServiceSyncers description: The number of concurrent external service syncers that can run.
 	RepoConcurrentExternalServiceSyncers int `json:"repoConcurrentExternalServiceSyncers,omitempty"`
 	// RepoListUpdateInterval description: Interval (in minutes) for checking code hosts (such as GitHub, Gitolite, etc.) for new repositories.
@@ -1327,7 +1405,7 @@ type SiteConfiguration struct {
 	UserReposMaxPerUser int `json:"userRepos.maxPerUser,omitempty"`
 }
 
-// Step description: A command to run (as part of a sequence) in a repository branch to produce the campaign's changes.
+// Step description: A command to run (as part of a sequence) in a repository branch to produce the required changes.
 type Step struct {
 	// Container description: The Docker image used to launch the Docker container in which the shell command is run.
 	Container string `json:"container"`
@@ -1393,6 +1471,8 @@ type Webhooks struct {
 type WorkspaceConfiguration struct {
 	// In description: The repositories in which to apply the workspace configuration. Supports globbing.
 	In string `json:"in,omitempty"`
+	// OnlyFetchWorkspace description: If this is true only the files in the workspace (and additional .gitignore) are downloaded instead of an archive of the full repository.
+	OnlyFetchWorkspace bool `json:"onlyFetchWorkspace,omitempty"`
 	// RootAtLocationOf description: The name of the file that sits at the root of the desired workspace.
 	RootAtLocationOf string `json:"rootAtLocationOf"`
 }

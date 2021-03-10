@@ -2,12 +2,11 @@ import OpenInNewIcon from 'mdi-react/OpenInNewIcon'
 import classnames from 'classnames'
 import React, { useState, useCallback, useMemo } from 'react'
 import { Link } from '../../../../../shared/src/components/Link'
-import { FilterType } from '../../../../../shared/src/search/query/util'
 import { buildSearchURLQuery } from '../../../../../shared/src/util/url'
 import { useInputValidation, deriveInputClassName } from '../../../../../shared/src/util/useInputValidation'
 import { SearchPatternType } from '../../../graphql-operations'
 import { scanSearchQuery } from '../../../../../shared/src/search/query/scanner'
-import { resolveFilter, validateFilter } from '../../../../../shared/src/search/query/filters'
+import { resolveFilter, validateFilter, FilterType } from '../../../../../shared/src/search/query/filters'
 
 interface TriggerAreaProps {
     query: string
@@ -45,12 +44,8 @@ export const FormTriggerArea: React.FunctionComponent<TriggerAreaProps> = ({
                                 filter =>
                                     filter.type === 'filter' &&
                                     resolveFilter(filter.field.value)?.type === FilterType.type &&
-                                    ((filter.value?.type === 'literal' &&
-                                        filter.value &&
-                                        isDiffOrCommit(filter.value.value)) ||
-                                        (filter.value?.type === 'quoted' &&
-                                            filter.value &&
-                                            isDiffOrCommit(filter.value.quotedValue)))
+                                    filter.value &&
+                                    isDiffOrCommit(filter.value.value)
                             )
                             if (!hasTypeDiffOrCommitFilter) {
                                 return 'Code monitors require queries to specify either `type:commit` or `type:diff`.'

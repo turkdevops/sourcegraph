@@ -13,6 +13,7 @@ import { TelemetryProps } from '../../../../shared/src/telemetry/telemetryServic
 import { OnboardingTourProps } from '../../search'
 import { AuthenticatedUser } from '../../auth'
 import { CreateAccessTokenResult, UserAreaUserFields } from '../../graphql-operations'
+import { UserRepositoriesUpdateProps } from '../../util'
 
 const NotFoundPage: React.FunctionComponent = () => <HeroPage icon={MapSearchIcon} title="404: Not Found" />
 
@@ -23,7 +24,8 @@ export interface UserSettingsAreaProps
         RouteComponentProps<{}>,
         ThemeProps,
         TelemetryProps,
-        OnboardingTourProps {
+        OnboardingTourProps,
+        UserRepositoriesUpdateProps {
     authenticatedUser: AuthenticatedUser
     sideBarItems: UserSettingsSidebarItems
     routes: readonly UserSettingsAreaRoute[]
@@ -74,7 +76,11 @@ export const UserSettingsArea = withAuthenticatedUser(
 
             return (
                 <div className="d-flex">
-                    <UserSettingsSidebar items={this.props.sideBarItems} {...this.props} className="flex-0 mr-3" />
+                    <UserSettingsSidebar
+                        items={this.props.sideBarItems}
+                        {...this.props}
+                        className="flex-0 mr-3 user-settings-sidebar"
+                    />
                     <div className="flex-1">
                         <ErrorBoundary location={this.props.location}>
                             <React.Suspense fallback={<LoadingSpinner className="icon-inline m-2" />}>

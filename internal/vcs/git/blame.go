@@ -87,8 +87,8 @@ func blameFileCmd(ctx context.Context, command cmdFunc, path string, opt *BlameO
 		nLines, _ := strconv.Atoi(hunkHeader[3])
 		hunk := &Hunk{
 			CommitID:  api.CommitID(commitID),
-			StartLine: int(lineNoCur),
-			EndLine:   int(lineNoCur + nLines),
+			StartLine: lineNoCur,
+			EndLine:   lineNoCur + nLines,
 			StartByte: byteOffset,
 		}
 
@@ -110,7 +110,7 @@ func blameFileCmd(ctx context.Context, command cmdFunc, path string, opt *BlameO
 			summary := strings.Join(strings.Split(remainingLines[9], " ")[1:], " ")
 			commit := Commit{
 				ID:      api.CommitID(commitID),
-				Message: summary,
+				Message: Message(summary),
 				Author: Signature{
 					Name:  author,
 					Email: email,
@@ -143,7 +143,7 @@ func blameFileCmd(ctx context.Context, command cmdFunc, path string, opt *BlameO
 			// git-blame parser above.
 			hunk.CommitID = commit.ID
 			hunk.Author = commit.Author
-			hunk.Message = commit.Message
+			hunk.Message = string(commit.Message)
 		}
 
 		// Consume remaining lines in hunk

@@ -2,17 +2,27 @@ package git
 
 import (
 	"context"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+
 	"github.com/sourcegraph/sourcegraph/internal/api"
 )
 
 func TestRepository_RawLogDiffSearch(t *testing.T) {
 	t.Parallel()
+
+	// We depend on newer versions of git. Log git version so if this fails we
+	// can compare.
+	if version, err := exec.Command("git", "version").CombinedOutput(); err != nil {
+		t.Fatal(err)
+	} else {
+		t.Log(string(version))
+	}
 
 	expiredCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Minute))
 	defer cancel()

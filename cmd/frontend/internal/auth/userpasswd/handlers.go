@@ -12,22 +12,25 @@ import (
 
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/auth"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/app/tracking"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/hubspot"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/hubspot/hubspotutil"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/session"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/suspiciousnames"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/authz"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/database"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbutil"
 	"github.com/sourcegraph/sourcegraph/internal/errcode"
-	"github.com/sourcegraph/sourcegraph/internal/hubspot/hubspotutil"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 )
 
 type credentials struct {
-	Email    string `json:"email"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Email           string `json:"email"`
+	Username        string `json:"username"`
+	Password        string `json:"password"`
+	AnonymousUserID string `json:"anonymousUserId"`
+	FirstSourceURL  string `json:"firstSourceUrl"`
 }
 
 // HandleSignUp handles submission of the user signup form.
@@ -186,7 +189,7 @@ func handleSignUp(w http.ResponseWriter, r *http.Request, failIfNewUserIsNotInit
 
 	// Track user data
 	if r.UserAgent() != "Sourcegraph e2etest-bot" {
-		go tracking.SyncUser(creds.Email, hubspotutil.SignupEventID, nil)
+		go hubspotutil.SyncUser(creds.Email, hubspotutil.SignupEventID, &hubspot.ContactProperties{AnonymousUserID: creds.AnonymousUserID, FirstSourceURL: creds.FirstSourceURL})
 	}
 }
 
@@ -242,26 +245,28 @@ func HandleSignIn(w http.ResponseWriter, r *http.Request) {
 }
 
 // Check availability of username for signup form
-func HandleCheckUsernameTaken(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	username, err := auth.NormalizeUsername(vars["username"])
+func HandleCheckUsernameTaken(db dbutil.DB) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		username, err := auth.NormalizeUsername(vars["username"])
 
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 
-	_, err = database.GlobalNamespaces.GetByName(r.Context(), username)
-	if err == database.ErrNamespaceNotFound {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		httpLogAndError(w, "Error checking username uniqueness", http.StatusInternalServerError, "err", err)
-		return
-	}
+		_, err = database.Namespaces(db).GetByName(r.Context(), username)
+		if err == database.ErrNamespaceNotFound {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			httpLogAndError(w, "Error checking username uniqueness", http.StatusInternalServerError, "err", err)
+			return
+		}
 
-	w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 func httpLogAndError(w http.ResponseWriter, msg string, code int, errArgs ...interface{}) {

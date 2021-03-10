@@ -14,6 +14,7 @@ import (
 
 	"github.com/opentracing-contrib/go-stdlib/nethttp"
 	"github.com/pkg/errors"
+
 	"github.com/sourcegraph/sourcegraph/cmd/searcher/protocol"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/endpoint"
@@ -43,7 +44,7 @@ var (
 var MockSearch func(ctx context.Context, repo api.RepoName, commit api.CommitID, p *search.TextPatternInfo, fetchTimeout time.Duration) (matches []*protocol.FileMatch, limitHit bool, err error)
 
 // Search searches repo@commit with p.
-func Search(ctx context.Context, searcherURLs *endpoint.Map, repo api.RepoName, branch string, commit api.CommitID, p *search.TextPatternInfo, fetchTimeout time.Duration, indexerEndpoints []string) (matches []*protocol.FileMatch, limitHit bool, err error) {
+func Search(ctx context.Context, searcherURLs *endpoint.Map, repo api.RepoName, branch string, commit api.CommitID, indexed bool, p *search.TextPatternInfo, fetchTimeout time.Duration, indexerEndpoints []string) (matches []*protocol.FileMatch, limitHit bool, err error) {
 	if MockSearch != nil {
 		return MockSearch(ctx, repo, commit, p, fetchTimeout)
 	}
@@ -57,7 +58,7 @@ func Search(ctx context.Context, searcherURLs *endpoint.Map, repo api.RepoName, 
 	q := url.Values{
 		"Repo":            []string{string(repo)},
 		"Commit":          []string{string(commit)},
-		"Branch":          []string{string(branch)},
+		"Branch":          []string{branch},
 		"Pattern":         []string{p.Pattern},
 		"ExcludePattern":  []string{p.ExcludePattern},
 		"IncludePatterns": p.IncludePatterns,
@@ -67,6 +68,7 @@ func Search(ctx context.Context, searcherURLs *endpoint.Map, repo api.RepoName, 
 
 		"PathPatternsAreRegExps": []string{"true"},
 		"IndexerEndpoints":       indexerEndpoints,
+		"Select":                 []string{string(p.Select.Type)},
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		t, err := deadline.MarshalText()
@@ -81,6 +83,9 @@ func Search(ctx context.Context, searcherURLs *endpoint.Map, repo api.RepoName, 
 	}
 	if p.IsStructuralPat {
 		q.Set("IsStructuralPat", "true")
+	}
+	if indexed {
+		q.Set("Indexed", "true")
 	}
 	if p.IsWordMatch {
 		q.Set("IsWordMatch", "true")

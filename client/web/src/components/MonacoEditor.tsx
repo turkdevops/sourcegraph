@@ -41,6 +41,7 @@ monaco.editor.defineTheme(SOURCEGRAPH_DARK, {
         { token: 'comment', foreground: '#ffa94d' },
         // Sourcegraph decorated language tokens
         { token: 'metaRepoRevisionSeparator', foreground: '#569cd9' },
+        { token: 'metaContextPrefix', foreground: '#da77f2' },
         // Regexp pattern highlighting
         { token: 'metaRegexpDelimited', foreground: '#ff6b6b' },
         { token: 'metaRegexpAssertion', foreground: '#ff6b6b' },
@@ -66,6 +67,8 @@ monaco.editor.defineTheme(SOURCEGRAPH_DARK, {
         { token: 'metaRevisionLabel', foreground: '#f2f4f8' },
         { token: 'metaRevisionReferencePath', foreground: '#f2f4f8' },
         { token: 'metaRevisionWildcard', foreground: '#3bc9db' },
+        // Path-like highlighting
+        { token: 'metaPathSeparator', foreground: '#868e96' },
     ],
 })
 
@@ -98,6 +101,7 @@ monaco.editor.defineTheme(SOURCEGRAPH_LIGHT, {
         { token: 'comment', foreground: '#d9480f' },
         // Sourcegraph decorated language tokens
         { token: 'metaRepoRevisionSeparator', foreground: '#268bd2' },
+        { token: 'metaContextPrefix', foreground: '#ae3ec9' },
         // Regexp pattern highlighting
         { token: 'metaRegexpDelimited', foreground: '#c92a2a' },
         { token: 'metaRegexpAssertion', foreground: '#c92a2a' },
@@ -123,6 +127,8 @@ monaco.editor.defineTheme(SOURCEGRAPH_LIGHT, {
         { token: 'metaRevisionLabel', foreground: '#2b3750' },
         { token: 'metaRevisionReferencePath', foreground: '#2b3750' },
         { token: 'metaRevisionWildcard', foreground: '#1098ad' },
+        // Path-like highlighting
+        { token: 'metaPathSeparator', foreground: '#868e96' },
     ],
 })
 
@@ -173,7 +179,6 @@ export class MonacoEditor extends React.PureComponent<Props, State> {
         }
         this.props.editorWillMount(monaco)
         const editor = monaco.editor.create(element, {
-            hover: { delay: 0 },
             value: this.props.value,
             language: this.props.language,
             theme: this.props.isLightTheme ? SOURCEGRAPH_LIGHT : SOURCEGRAPH_DARK,

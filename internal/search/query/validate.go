@@ -5,10 +5,23 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-enry/go-enry/v2"
 	"github.com/pkg/errors"
+
+	"github.com/sourcegraph/sourcegraph/internal/search/filter"
 )
+
+// IsBasic returns whether a query is a basic query. A basic query is one which
+// does not have a DNF-expansion. I.e., there is only one disjunct. A basic
+// query implies that it has no subexpressions that we need to evaluate. IsBasic
+// is used in our codebase where legacy code has not been updated to handle
+// queries with multiple expressions (like alerts), and assume only one
+// evaluatable query.
+func IsBasic(nodes []Node) bool {
+	return len(Dnf(nodes)) == 1
+}
 
 // exists traverses every node in nodes and returns early as soon as fn is satisfied.
 func exists(nodes []Node, fn func(node Node) bool) bool {
@@ -53,16 +66,6 @@ func containsPattern(node Node) bool {
 	return exists([]Node{node}, func(node Node) bool {
 		_, ok := node.(Pattern)
 		return ok
-	})
-}
-
-// containsField returns true if the field exists in the query.
-func containsField(nodes []Node, field string) bool {
-	return exists(nodes, func(node Node) bool {
-		if p, ok := node.(Parameter); ok && p.Field == field {
-			return true
-		}
-		return false
 	})
 }
 
@@ -191,6 +194,14 @@ func validateField(field, value string, negated bool, seen map[string]struct{}) 
 		return nil
 	}
 
+	isDuration := func() error {
+		_, err := time.ParseDuration(value)
+		if err != nil {
+			return errors.New(`invalid value for field 'timeout' (examples: "timeout:2s", "timeout:200ms")`)
+		}
+		return nil
+	}
+
 	isLanguage := func() error {
 		_, ok := enry.GetLanguageByAlias(value)
 		if !ok {
@@ -199,8 +210,21 @@ func validateField(field, value string, negated bool, seen map[string]struct{}) 
 		return nil
 	}
 
+	isYesNoOnly := func() error {
+		v := ParseYesNoOnly(value)
+		if v == Invalid {
+			return fmt.Errorf("invalid value %q for field %q. Valid values are: yes, only, no", value, field)
+		}
+		return nil
+	}
+
 	isUnrecognizedField := func() error {
 		return fmt.Errorf("unrecognized field %q", field)
+	}
+
+	isValidSelect := func() error {
+		_, err := filter.SelectPathFromString(value)
+		return err
 	}
 
 	satisfies := func(fns ...func() error) error {
@@ -223,15 +247,12 @@ func validateField(field, value string, negated bool, seen map[string]struct{}) 
 		FieldRepo:
 		return satisfies(isValidRegexp)
 	case
-		FieldRepoGroup:
+		FieldRepoGroup,
+		FieldContext:
 		return satisfies(isSingular, isNotNegated)
 	case
 		FieldFile:
 		return satisfies(isValidRegexp)
-	case
-		FieldFork,
-		FieldArchived:
-		return satisfies(isSingular, isNotNegated)
 	case
 		FieldLang:
 		return satisfies(isLanguage)
@@ -259,8 +280,10 @@ func validateField(field, value string, negated bool, seen map[string]struct{}) 
 		FieldMessage:
 		return satisfies(isValidRegexp)
 	case
-		FieldIndex:
-		return satisfies(isSingular, isNotNegated)
+		FieldIndex,
+		FieldFork,
+		FieldArchived:
+		return satisfies(isSingular, isNotNegated, isYesNoOnly)
 	case
 		FieldCount:
 		return satisfies(isSingular, isNumber, isNotNegated)
@@ -268,13 +291,17 @@ func validateField(field, value string, negated bool, seen map[string]struct{}) 
 		FieldStable:
 		return satisfies(isSingular, isBoolean, isNotNegated)
 	case
-		FieldMax,
-		FieldTimeout,
 		FieldCombyRule:
 		return satisfies(isSingular, isNotNegated)
 	case
+		FieldTimeout:
+		return satisfies(isSingular, isNotNegated, isDuration)
+	case
 		FieldRev:
 		return satisfies(isSingular, isNotNegated)
+	case
+		FieldSelect:
+		return satisfies(isSingular, isNotNegated, isValidSelect)
 	default:
 		return isUnrecognizedField()
 	}
@@ -331,7 +358,7 @@ func validateRepoHasFile(nodes []Node) error {
 		if field == FieldRepoHasFile {
 			seenRepoHasFile = true
 		}
-		if field == FieldType && strings.ToLower(value) == "symbol" {
+		if field == FieldType && strings.EqualFold(value, "symbol") {
 			seenTypeSymbol = true
 		}
 	})
@@ -413,4 +440,60 @@ func validate(nodes []Node) error {
 		validateRepoHasFile,
 		validateCommitParameters,
 	)
+}
+
+type YesNoOnly string
+
+const (
+	Yes     YesNoOnly = "yes"
+	No      YesNoOnly = "no"
+	Only    YesNoOnly = "only"
+	Invalid YesNoOnly = "invalid"
+)
+
+func ParseYesNoOnly(s string) YesNoOnly {
+	switch s {
+	case "y", "Y", "yes", "YES", "Yes":
+		return Yes
+	case "n", "N", "no", "NO", "No":
+		return No
+	case "o", "only", "ONLY", "Only":
+		return Only
+	default:
+		if b, err := strconv.ParseBool(s); err == nil {
+			if b {
+				return Yes
+			}
+			return No
+		}
+		return Invalid
+	}
+}
+
+func ContainsRefGlobs(q Q) bool {
+	containsRefGlobs := false
+	if repoFilterValues, _ := q.Repositories(); len(repoFilterValues) > 0 {
+		for _, v := range repoFilterValues {
+			repoRev := strings.SplitN(v, "@", 2)
+			if len(repoRev) == 1 { // no revision
+				continue
+			}
+			if ContainsNoGlobSyntax(repoRev[1]) {
+				continue
+			}
+			containsRefGlobs = true
+			break
+		}
+	}
+	return containsRefGlobs
+}
+
+func HasTypeRepo(q Q) bool {
+	found := false
+	VisitField(q, "type", func(value string, _ bool, _ Annotation) {
+		if value == "repo" {
+			found = true
+		}
+	})
+	return found
 }

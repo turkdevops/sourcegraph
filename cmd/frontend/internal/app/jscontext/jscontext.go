@@ -84,9 +84,11 @@ type JSContext struct {
 
 	Branding *schema.Branding `json:"branding"`
 
-	CampaignsEnabled bool `json:"campaignsEnabled"`
+	BatchChangesEnabled bool `json:"batchChangesEnabled"`
 
 	CodeIntelAutoIndexingEnabled bool `json:"codeIntelAutoIndexingEnabled"`
+
+	ProductResearchPageEnabled bool `json:"productResearchPageEnabled"`
 
 	ExperimentalFeatures schema.ExperimentalFeatures `json:"experimentalFeatures"`
 }
@@ -136,10 +138,10 @@ func NewJSContextFromRequest(req *http.Request) JSContext {
 		sentryDSN = &siteConfig.Log.Sentry.Dsn
 	}
 
-	// Check if campaigns are enabled for this user.
-	campaignsEnabled := conf.CampaignsEnabled()
-	if conf.Get().CampaignsRestrictToAdmins && backend.CheckCurrentUserIsSiteAdmin(req.Context()) != nil {
-		campaignsEnabled = false
+	// Check if batch changes are enabled for this user.
+	batchChangesEnabled := conf.BatchChangesEnabled()
+	if conf.BatchChangesRestrictedToAdmins() && backend.CheckCurrentUserIsSiteAdmin(req.Context()) != nil {
+		batchChangesEnabled = false
 	}
 
 	// 🚨 SECURITY: This struct is sent to all users regardless of whether or
@@ -186,9 +188,11 @@ func NewJSContextFromRequest(req *http.Request) JSContext {
 
 		Branding: globals.Branding(),
 
-		CampaignsEnabled: campaignsEnabled,
+		BatchChangesEnabled: batchChangesEnabled,
 
 		CodeIntelAutoIndexingEnabled: conf.CodeIntelAutoIndexingEnabled(),
+
+		ProductResearchPageEnabled: conf.ProductResearchPageEnabled(),
 
 		ExperimentalFeatures: conf.ExperimentalFeatures(),
 	}

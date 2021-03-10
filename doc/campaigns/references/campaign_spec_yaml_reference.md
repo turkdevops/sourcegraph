@@ -426,7 +426,7 @@ The title of the changeset on the code host.
 The body (description) of the changeset on the code host. If the code supports Markdown you can use it here.
 
 <aside class="note">
-<span class="badge badge-feature">Templating</span> <code>changesetTemplate.title</code> can include <a href="campaign_spec_templating">template variables</a> starting with Sourcegraph 3.24 and <a href="../../cli">Sourcegraph CLI</a> 3.24.
+<span class="badge badge-feature">Templating</span> <code>changesetTemplate.body</code> can include <a href="campaign_spec_templating">template variables</a> starting with Sourcegraph 3.24 and <a href="../../cli">Sourcegraph CLI</a> 3.24.
 </aside>
 
 ## [`changesetTemplate.branch`](#changesettemplate-branch)
@@ -434,7 +434,7 @@ The body (description) of the changeset on the code host. If the code supports M
 The name of the Git branch to create or update on each repository with the changes.
 
 <aside class="note">
-<span class="badge badge-feature">Templating</span> <code>changesetTemplate.title</code> can include <a href="campaign_spec_templating">template variables</a> starting with Sourcegraph 3.24 and <a href="../../cli">Sourcegraph CLI</a> 3.24.
+<span class="badge badge-feature">Templating</span> <code>changesetTemplate.branch</code> can include <a href="campaign_spec_templating">template variables</a> starting with Sourcegraph 3.24 and <a href="../../cli">Sourcegraph CLI</a> 3.24.
 </aside>
 
 ## [`changesetTemplate.commit`](#changesettemplate-commit)
@@ -446,7 +446,7 @@ The Git commit to create with the changes.
 The Git commit message.
 
 <aside class="note">
-<span class="badge badge-feature">Templating</span> <code>changesetTemplate.title</code> can include <a href="campaign_spec_templating">template variables</a> starting with Sourcegraph 3.24 and <a href="../../cli">Sourcegraph CLI</a> 3.24.
+<span class="badge badge-feature">Templating</span> <code>changesetTemplate.commit.message</code> can include <a href="campaign_spec_templating">template variables</a> starting with Sourcegraph 3.24 and <a href="../../cli">Sourcegraph CLI</a> 3.24.
 </aside>
 
 ## [`changesetTemplate.commit.author`](#changesettemplate-commit-author)
@@ -454,7 +454,7 @@ The Git commit message.
 The `name` and `email` of the Git commit author.
 
 <aside class="note">
-<span class="badge badge-feature">Templating</span> <code>changesetTemplate.title</code> can include <a href="campaign_spec_templating">template variables</a> starting with Sourcegraph 3.24 and <a href="../../cli">Sourcegraph CLI</a> 3.24.
+<span class="badge badge-feature">Templating</span> <code>changesetTemplate.commit.author</code> can include <a href="campaign_spec_templating">template variables</a> starting with Sourcegraph 3.24 and <a href="../../cli">Sourcegraph CLI</a> 3.24.
 </aside>
 
 ### Examples
@@ -522,6 +522,14 @@ published:
 
 > NOTE: The standalone `"*"` is quoted in the key to avoid ambiguity in the YAML document.
 
+By adding a `@<branch>` at the end of a match-rule, the rule is only matched against changesets with that branch:
+
+```yaml
+published:
+  - github.com/sourcegraph/src-*@my-branch: true
+  - github.com/sourcegraph/src-*@my-other-branch: true
+```
+
 ### Examples
 
 To publish all changesets created by a campaign:
@@ -564,6 +572,17 @@ changesetTemplate:
     - github.com/*: draft
 ```
 
+To publish only one of many changesets in a repository by addressing them with their branch name:
+
+```yaml
+changesetTemplate:
+  published:
+    - "*": true
+    - github.com/sourcegraph/*@my-branch-name-1: draft
+    - github.com/sourcegraph/*@my-branch-name-2: false
+```
+
+(Multiple changesets in a single repository can be produced, for example, [per project in a monorepo](../how-tos/creating_changesets_per_project_in_monorepos.md) or by [transforming large changes into multiple changesets](../how-tos/creating_multiple_changesets_in_large_repositories.md)).
 
 ## [`transformChanges`](#transformchanges)
 
@@ -658,9 +677,9 @@ changesetTemplate:
   # Since a changeset is uniquely identified by its repository and its
   # branch we need to ensure that each changesets has a unique branch name.
 
-  # We can use templating and helper functions for to use the `path` in which
+  # We can use templating and helper functions get the `path` in which
   # the `steps` executed and turn that into a branch name:
-  branch: ${{ join "-" "my-multi-workspace-campaign" (replace steps.path "/" "-") }}
+  branch: my-multi-workspace-campaign-${{ replace steps.path "/" "-" }}
 ```
 
 Using templating to produce a unique branch name in repositories _with_ workspaces and repositories without workspaces:
@@ -683,7 +702,6 @@ changesetTemplate:
   branch: ${{ join_if "-" "my-multi-workspace-campaign" (replace steps.path "/" "-") }}
 ```
 
-
 Defining where Go, JavaScript, and Rust projects live in multiple repositories:
 
 ```yaml
@@ -692,6 +710,7 @@ workspaces:
     in: github.com/sourcegraph/go-*
   - rootAtLocationOf: package.json
     in: github.com/sourcegraph/*-js
+    onlyFetchWorkspace: true
   - rootAtLocationOf: Cargo.toml
     in: github.com/rusty-org/*
 
@@ -778,4 +797,57 @@ Match all repository names that begin with `gitlab.com/my-javascript-org/` and e
 workspaces:
   - rootAtLocationOf: package.json
     in: gitlab.com/my-javascript-org/*-plugin
+```
+
+## [`workspaces.onlyFetchWorkspace`](#workspaces-onlyfetchworkspace)
+
+When set to `true`, only the folder containing the workspace is downloaded to execute the `steps`.
+
+This field is not required and when not set the default is `false`.
+
+Additional files — `.gitignore` and `.gitattributes` as of now — are downloaded from the location of the workspace up to the root of the repository.
+
+For example, with the following file layout in a repository
+
+```
+.
+├── a
+│   ├── b
+│   │   ├── [... other files in b ...]
+│   │   ├── package.json
+│   │   └── .gitignore
+│   │
+│   ├── [... other files in a ...]
+│   ├── .gitattributes
+│   └── .gitignore
+│
+├── [... other files in root ... ]
+└── .gitignore
+```
+
+and this workspace configuration
+
+```yaml
+workspaces:
+  - rootAtLocationOf: package.json
+    in: github.com/our-our/our-large-monorepo
+    fetchOnlyWorkspace: true
+```
+
+then
+
+- the `steps` will be executed in `b`
+- the complete contents of `b` will be downloaded and are available to the steps
+- the `.gitattributes` and `.gitignore` files in `a` will be downloaded and put in `a`, **but only those**
+- the `.gitignore` files in the root will be downloaded and put in the root folder, **but only that file**
+
+### Examples
+
+Only download the workspaces of specific JavaScript projects in a large monorepo:
+
+```yaml
+workspaces:
+  - rootAtLocationOf: package.json
+    in: github.com/our-our/our-large-monorepo
+    fetchOnlyWorkspace: true
 ```

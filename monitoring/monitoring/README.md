@@ -15,6 +15,7 @@ To learn more about the generator\, see the top\-level program: https://github.c
 ## Index
 
 - [func Generate(logger log15.Logger, opts GenerateOptions, containers ...*Container) error](<#func-generate>)
+- [func Int64Ptr(i int64) *int64](<#func-int64ptr>)
 - [func StringPtr(s string) *string](<#func-stringptr>)
 - [type Container](<#type-container>)
 - [type GenerateOptions](<#type-generateoptions>)
@@ -23,10 +24,10 @@ To learn more about the generator\, see the top\-level program: https://github.c
 - [type ObservableAlertDefinition](<#type-observablealertdefinition>)
   - [func Alert() *ObservableAlertDefinition](<#func-alert>)
   - [func (a *ObservableAlertDefinition) For(d time.Duration) *ObservableAlertDefinition](<#func-observablealertdefinition-for>)
-  - [func (a *ObservableAlertDefinition) Greater(f float64) *ObservableAlertDefinition](<#func-observablealertdefinition-greater>)
-  - [func (a *ObservableAlertDefinition) GreaterOrEqual(f float64) *ObservableAlertDefinition](<#func-observablealertdefinition-greaterorequal>)
-  - [func (a *ObservableAlertDefinition) Less(f float64) *ObservableAlertDefinition](<#func-observablealertdefinition-less>)
-  - [func (a *ObservableAlertDefinition) LessOrEqual(f float64) *ObservableAlertDefinition](<#func-observablealertdefinition-lessorequal>)
+  - [func (a *ObservableAlertDefinition) Greater(f float64, aggregator *string) *ObservableAlertDefinition](<#func-observablealertdefinition-greater>)
+  - [func (a *ObservableAlertDefinition) GreaterOrEqual(f float64, aggregator *string) *ObservableAlertDefinition](<#func-observablealertdefinition-greaterorequal>)
+  - [func (a *ObservableAlertDefinition) Less(f float64, aggregator *string) *ObservableAlertDefinition](<#func-observablealertdefinition-less>)
+  - [func (a *ObservableAlertDefinition) LessOrEqual(f float64, aggregator *string) *ObservableAlertDefinition](<#func-observablealertdefinition-lessorequal>)
 - [type ObservableOwner](<#type-observableowner>)
 - [type ObservablePanel](<#type-observablepanel>)
   - [func Panel() ObservablePanel](<#func-panel>)
@@ -50,6 +51,14 @@ func Generate(logger log15.Logger, opts GenerateOptions, containers ...*Containe
 ```
 
 Generate is the main Sourcegraph monitoring generator entrypoint\.
+
+## func [Int64Ptr](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/util.go#L29>)
+
+```go
+func Int64Ptr(i int64) *int64
+```
+
+IntPtr converts an int64 value to a pointer\, useful for setting fields in some APIs\.
 
 ## func [StringPtr](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/util.go#L23>)
 
@@ -115,7 +124,7 @@ type GenerateOptions struct {
 }
 ```
 
-## type [Group](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L387-L402>)
+## type [Group](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L354-L369>)
 
 Group describes a group of observable information about a container\.
 
@@ -140,7 +149,7 @@ type Group struct {
 }
 ```
 
-## type [Observable](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L465-L580>)
+## type [Observable](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L434-L549>)
 
 Observable describes a metric about a container that can be observed\. For example\, memory usage\.
 
@@ -265,7 +274,7 @@ type Observable struct {
 }
 ```
 
-## type [ObservableAlertDefinition](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L644-L650>)
+## type [ObservableAlertDefinition](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L613-L628>)
 
 ObservableAlertDefinition defines when an alert would be considered firing\.
 
@@ -275,7 +284,7 @@ type ObservableAlertDefinition struct {
 }
 ```
 
-### func [Alert](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L639>)
+### func [Alert](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L608>)
 
 ```go
 func Alert() *ObservableAlertDefinition
@@ -283,7 +292,7 @@ func Alert() *ObservableAlertDefinition
 
 Alert provides a builder for defining alerting on an Observable\.
 
-### func \(\*ObservableAlertDefinition\) [For](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L682>)
+### func \(\*ObservableAlertDefinition\) [For](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L684>)
 
 ```go
 func (a *ObservableAlertDefinition) For(d time.Duration) *ObservableAlertDefinition
@@ -291,39 +300,39 @@ func (a *ObservableAlertDefinition) For(d time.Duration) *ObservableAlertDefinit
 
 For indicates how long the given thresholds must be exceeded for this alert to be considered firing\. Defaults to 0s \(immediately alerts when threshold is exceeded\)\.
 
-### func \(\*ObservableAlertDefinition\) [Greater](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L667>)
+### func \(\*ObservableAlertDefinition\) [Greater](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L657>)
 
 ```go
-func (a *ObservableAlertDefinition) Greater(f float64) *ObservableAlertDefinition
+func (a *ObservableAlertDefinition) Greater(f float64, aggregator *string) *ObservableAlertDefinition
 ```
 
 Greater indicates the alert should fire when strictly greater to this value\.
 
-### func \(\*ObservableAlertDefinition\) [GreaterOrEqual](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L653>)
+### func \(\*ObservableAlertDefinition\) [GreaterOrEqual](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L631>)
 
 ```go
-func (a *ObservableAlertDefinition) GreaterOrEqual(f float64) *ObservableAlertDefinition
+func (a *ObservableAlertDefinition) GreaterOrEqual(f float64, aggregator *string) *ObservableAlertDefinition
 ```
 
 GreaterOrEqual indicates the alert should fire when greater or equal the given value\.
 
-### func \(\*ObservableAlertDefinition\) [Less](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L674>)
+### func \(\*ObservableAlertDefinition\) [Less](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L670>)
 
 ```go
-func (a *ObservableAlertDefinition) Less(f float64) *ObservableAlertDefinition
+func (a *ObservableAlertDefinition) Less(f float64, aggregator *string) *ObservableAlertDefinition
 ```
 
 Less indicates the alert should fire when strictly less than this value\.
 
-### func \(\*ObservableAlertDefinition\) [LessOrEqual](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L660>)
+### func \(\*ObservableAlertDefinition\) [LessOrEqual](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L644>)
 
 ```go
-func (a *ObservableAlertDefinition) LessOrEqual(f float64) *ObservableAlertDefinition
+func (a *ObservableAlertDefinition) LessOrEqual(f float64, aggregator *string) *ObservableAlertDefinition
 ```
 
 LessOrEqual indicates the alert should fire when less than or equal to the given value\.
 
-## type [ObservableOwner](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L435>)
+## type [ObservableOwner](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L402>)
 
 ObservableOwner denotes a team that owns an Observable\. The current teams are described in the handbook: https://about.sourcegraph.com/company/team/org_chart#engineering
 
@@ -333,13 +342,13 @@ type ObservableOwner string
 
 ```go
 const (
-    ObservableOwnerSearch       ObservableOwner = "search"
-    ObservableOwnerCampaigns    ObservableOwner = "campaigns"
-    ObservableOwnerCodeIntel    ObservableOwner = "code-intel"
-    ObservableOwnerDistribution ObservableOwner = "distribution"
-    ObservableOwnerSecurity     ObservableOwner = "security"
-    ObservableOwnerWeb          ObservableOwner = "web"
-    ObservableOwnerCloud        ObservableOwner = "cloud"
+    ObservableOwnerSearch          ObservableOwner = "search"
+    ObservableOwnerBatches         ObservableOwner = "batches"
+    ObservableOwnerCodeIntel       ObservableOwner = "code-intel"
+    ObservableOwnerDistribution    ObservableOwner = "distribution"
+    ObservableOwnerSecurity        ObservableOwner = "security"
+    ObservableOwnerWeb             ObservableOwner = "web"
+    ObservableOwnerCoreApplication ObservableOwner = "core application"
 )
 ```
 
@@ -465,7 +474,7 @@ Using a shared prefix helps with discoverability of available options\.
 type ObservablePanelOption func(Observable, *sdk.GraphPanel)
 ```
 
-## type [Row](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L419>)
+## type [Row](<https://github.com/sourcegraph/sourcegraph/blob/main/monitoring/monitoring/monitoring.go#L386>)
 
 Row of observable metrics\.
 

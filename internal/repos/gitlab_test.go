@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -14,8 +15,9 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
+
 	"github.com/sourcegraph/sourcegraph/internal/api"
-	"github.com/sourcegraph/sourcegraph/internal/campaigns"
+	"github.com/sourcegraph/sourcegraph/internal/batches"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/auth"
 	"github.com/sourcegraph/sourcegraph/internal/extsvc/gitlab"
@@ -425,7 +427,7 @@ func TestGitLabSource_ChangesetSource(t *testing.T) {
 		t.Run("error from ParseInt", func(t *testing.T) {
 			p := newGitLabChangesetSourceTestProvider(t)
 			if err := p.source.LoadChangeset(p.ctx, &Changeset{
-				Changeset: &campaigns.Changeset{
+				Changeset: &batches.Changeset{
 					ExternalID: "foo",
 					Metadata:   &gitlab.MergeRequest{},
 				},
@@ -537,12 +539,98 @@ func TestGitLabSource_ChangesetSource(t *testing.T) {
 			p := newGitLabChangesetSourceTestProvider(t)
 			p.changeset.Changeset.ExternalID = "43"
 			p.changeset.Changeset.Metadata = p.mr
-			p.mockGetMergeRequest(43, nil, gitlab.HTTPError(404))
+			p.mockGetMergeRequest(43, nil, gitlab.ErrMergeRequestNotFound)
 
 			if err := p.source.LoadChangeset(p.ctx, p.changeset); err == nil {
 				t.Fatal("unexpectedly no error for not found changeset")
-			} else if err.Error() != (ChangesetNotFoundError{Changeset: &Changeset{Changeset: &campaigns.Changeset{ExternalID: "43"}}}).Error() {
+			} else if err.Error() != (ChangesetNotFoundError{Changeset: &Changeset{Changeset: &batches.Changeset{ExternalID: "43"}}}).Error() {
 				t.Fatalf("unexpected error: %+v", err)
+			}
+		})
+
+		t.Run("integration", func(t *testing.T) {
+			testCases := []struct {
+				name string
+				cs   *Changeset
+				err  string
+			}{
+				{
+					name: "found",
+					cs: &Changeset{
+						Repo: &types.Repo{Metadata: &gitlab.Project{
+							// sourcegraph/sourcegraph
+							ProjectCommon: gitlab.ProjectCommon{ID: 16606088},
+						}},
+						Changeset: &batches.Changeset{ExternalID: "2"},
+					},
+				},
+				{
+					name: "not-found",
+					cs: &Changeset{
+						Repo: &types.Repo{Metadata: &gitlab.Project{
+							// sourcegraph/sourcegraph
+							ProjectCommon: gitlab.ProjectCommon{ID: 16606088},
+						}},
+						Changeset: &batches.Changeset{ExternalID: "100000"},
+					},
+					err: "Changeset with external ID 100000 not found",
+				},
+				{
+					name: "project-not-found",
+					cs: &Changeset{
+						Repo: &types.Repo{Metadata: &gitlab.Project{
+							ProjectCommon: gitlab.ProjectCommon{ID: 999999999999},
+						}},
+						Changeset: &batches.Changeset{ExternalID: "100000"},
+					},
+					// Not a changeset not found error. This is important so we don't set
+					// a changeset as deleted, when the token scope cannot view the project
+					// the MR lives in.
+					err: "retrieving merge request 100000: sending request to get a merge request: GitLab project not found",
+				},
+			}
+
+			for _, tc := range testCases {
+				tc := tc
+				tc.name = "GitlabSource_LoadChangeset_" + tc.name
+
+				t.Run(tc.name, func(t *testing.T) {
+					cf, save := newClientFactory(t, tc.name)
+					defer save(t)
+
+					lg := log15.New()
+					lg.SetHandler(log15.DiscardHandler())
+
+					svc := &types.ExternalService{
+						Kind: extsvc.KindGitLab,
+						Config: marshalJSON(t, &schema.GitLabConnection{
+							Url:   "https://gitlab.com",
+							Token: os.Getenv("GITLAB_TOKEN"),
+						}),
+					}
+
+					gitlabSource, err := NewGitLabSource(svc, cf)
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					ctx := context.Background()
+					if tc.err == "" {
+						tc.err = "<nil>"
+					}
+
+					err = gitlabSource.LoadChangeset(ctx, tc.cs)
+					if have, want := fmt.Sprint(err), tc.err; have != want {
+						t.Errorf("error:\nhave: %q\nwant: %q", have, want)
+					}
+
+					if err != nil {
+						return
+					}
+
+					meta := tc.cs.Changeset.Metadata.(*gitlab.MergeRequest)
+					testutil.AssertGolden(t, "testdata/golden/"+tc.name, update(tc.name), meta)
+				})
 			}
 		})
 
@@ -673,7 +761,7 @@ func TestGitLabSource_ChangesetSource(t *testing.T) {
 			p := newGitLabChangesetSourceTestProvider(t)
 
 			err := p.source.UpdateChangeset(p.ctx, &Changeset{
-				Changeset: &campaigns.Changeset{Metadata: struct{}{}},
+				Changeset: &batches.Changeset{Metadata: struct{}{}},
 			})
 			if err == nil {
 				t.Error("unexpected nil error")
@@ -878,7 +966,7 @@ func newGitLabChangesetSourceTestProvider(t *testing.T) *gitLabChangesetSourceTe
 	prov := gitlab.NewClientProvider(&url.URL{}, &panicDoer{})
 	p := &gitLabChangesetSourceTestProvider{
 		changeset: &Changeset{
-			Changeset: &campaigns.Changeset{},
+			Changeset: &batches.Changeset{},
 			Repo:      &types.Repo{Metadata: &gitlab.Project{}},
 			HeadRef:   "refs/heads/head",
 			BaseRef:   "refs/heads/base",

@@ -3,7 +3,7 @@ import * as H from 'history'
 import * as Monaco from 'monaco-editor'
 import { isPlainObject } from 'lodash'
 import { MonacoEditor } from '../../components/MonacoEditor'
-import { QueryState } from '../helpers'
+import { QueryState, submitSearch } from '../helpers'
 import { getProviders } from '../../../../shared/src/search/query/providers'
 import { Subscription, Observable, Unsubscribable, ReplaySubject } from 'rxjs'
 import { fetchSuggestions } from '../backend'
@@ -16,6 +16,7 @@ import { KeyboardShortcut } from '../../../../shared/src/keyboardShortcuts'
 import { KEYBOARD_SHORTCUT_FOCUS_SEARCHBAR } from '../../keyboardShortcuts/keyboardShortcuts'
 import { observeResize } from '../../util/dom'
 import { SearchPatternType } from '../../graphql-operations'
+import { SearchContextDropdown } from './SearchContextDropdown'
 
 export interface MonacoQueryInputProps
     extends Omit<TogglesProps, 'navbarSearchQuery'>,
@@ -272,6 +273,13 @@ export const MonacoQueryInput: React.FunctionComponent<MonacoQueryInputProps> = 
         editor.focus()
     }, [editor, autoFocus])
 
+    // Always focus the editor on selectedSearchContextSpec change
+    useEffect(() => {
+        if (props.selectedSearchContextSpec) {
+            editor?.focus()
+        }
+    }, [editor, props.selectedSearchContextSpec])
+
     // If an edit wasn't triggered by the user,
     // place the cursor at the end of the query.
     useEffect(() => {
@@ -329,6 +337,7 @@ export const MonacoQueryInput: React.FunctionComponent<MonacoQueryInputProps> = 
             horizontal: 'hidden',
         },
         glyphMargin: false,
+        hover: { delay: 150 },
         lineDecorationsWidth: 0,
         lineNumbersMinChars: 0,
         overviewRulerBorder: false,
@@ -340,34 +349,40 @@ export const MonacoQueryInput: React.FunctionComponent<MonacoQueryInputProps> = 
         fixedOverflowWidgets: true,
         contextmenu: false,
         links: false,
+        // Match our monospace/code style from code.scss
+        fontFamily: 'sfmono-regular, consolas, menlo, dejavu sans mono, monospace',
         // Display the cursor as a 1px line.
         cursorStyle: 'line',
         cursorWidth: 1,
     }
     return (
         <>
-            <div ref={setContainer} className="monaco-query-input-container">
-                {props.showSearchContext && <span>context:global</span>}
-                <div className="flex-grow-1 flex-shrink-past-contents" onFocus={onFocus}>
-                    <MonacoEditor
-                        id="monaco-query-input"
-                        language={SOURCEGRAPH_SEARCH}
-                        value={queryState.query}
-                        height={17}
-                        isLightTheme={props.isLightTheme}
-                        editorWillMount={setMonacoInstance}
-                        onEditorCreated={setEditor}
-                        options={options}
-                        border={false}
-                        keyboardShortcutForFocus={KEYBOARD_SHORTCUT_FOCUS_SEARCHBAR}
-                        className="test-query-input"
+            <div className="monaco-query-input-container">
+                {props.showSearchContext && (
+                    <SearchContextDropdown query={queryState.query} submitSearch={submitSearch} {...props} />
+                )}
+                <div className="monaco-query-input-container__focus-container flex-shrink-past-contents">
+                    <div ref={setContainer} className="flex-grow-1 flex-shrink-past-contents" onFocus={onFocus}>
+                        <MonacoEditor
+                            id="monaco-query-input"
+                            language={SOURCEGRAPH_SEARCH}
+                            value={queryState.query}
+                            height={17}
+                            isLightTheme={props.isLightTheme}
+                            editorWillMount={setMonacoInstance}
+                            onEditorCreated={setEditor}
+                            options={options}
+                            border={false}
+                            keyboardShortcutForFocus={KEYBOARD_SHORTCUT_FOCUS_SEARCHBAR}
+                            className="test-query-input"
+                        />
+                    </div>
+                    <Toggles
+                        {...props}
+                        navbarSearchQuery={queryState.query}
+                        className="monaco-query-input-container__toggle-container"
                     />
                 </div>
-                <Toggles
-                    {...props}
-                    navbarSearchQuery={queryState.query}
-                    className="monaco-query-input-container__toggle-container"
-                />
             </div>
         </>
     )

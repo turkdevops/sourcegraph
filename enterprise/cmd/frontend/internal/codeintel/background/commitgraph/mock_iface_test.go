@@ -4,10 +4,11 @@ package commitgraph
 
 import (
 	"context"
-	gitserver "github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/gitserver"
-	dbstore "github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/stores/dbstore"
 	"sync"
 	"time"
+
+	gitserver "github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/gitserver"
+	dbstore "github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/stores/dbstore"
 )
 
 // MockDBStore is a mock implementation of the DBStore interface (from the
@@ -101,7 +102,7 @@ func (f *DBStoreCalculateVisibleUploadsFunc) SetDefaultHook(hook func(context.Co
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// CalculateVisibleUploads method of the parent MockDBStore instance inovkes
+// CalculateVisibleUploads method of the parent MockDBStore instance invokes
 // the hook at the front of the queue and discards it. After the queue is
 // empty, the default hook function is invoked for any future action.
 func (f *DBStoreCalculateVisibleUploadsFunc) PushHook(hook func(context.Context, int, *gitserver.CommitGraph, string, int, time.Time) error) {
@@ -220,7 +221,7 @@ func (f *DBStoreDirtyRepositoriesFunc) SetDefaultHook(hook func(context.Context)
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// DirtyRepositories method of the parent MockDBStore instance inovkes the
+// DirtyRepositories method of the parent MockDBStore instance invokes the
 // hook at the front of the queue and discards it. After the queue is empty,
 // the default hook function is invoked for any future action.
 func (f *DBStoreDirtyRepositoriesFunc) PushHook(hook func(context.Context) (map[int]int, error)) {
@@ -325,7 +326,7 @@ func (f *DBStoreGetUploadsFunc) SetDefaultHook(hook func(context.Context, dbstor
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// GetUploads method of the parent MockDBStore instance inovkes the hook at
+// GetUploads method of the parent MockDBStore instance invokes the hook at
 // the front of the queue and discards it. After the queue is empty, the
 // default hook function is invoked for any future action.
 func (f *DBStoreGetUploadsFunc) PushHook(hook func(context.Context, dbstore.GetUploadsOptions) ([]dbstore.Upload, int, error)) {
@@ -436,7 +437,7 @@ func (f *DBStoreLockFunc) SetDefaultHook(hook func(context.Context, int, bool) (
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// Lock method of the parent MockDBStore instance inovkes the hook at the
+// Lock method of the parent MockDBStore instance invokes the hook at the
 // front of the queue and discards it. After the queue is empty, the default
 // hook function is invoked for any future action.
 func (f *DBStoreLockFunc) PushHook(hook func(context.Context, int, bool) (bool, dbstore.UnlockFunc, error)) {
@@ -607,7 +608,7 @@ func (f *GitserverClientCommitDateFunc) SetDefaultHook(hook func(context.Context
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// CommitDate method of the parent MockGitserverClient instance inovkes the
+// CommitDate method of the parent MockGitserverClient instance invokes the
 // hook at the front of the queue and discards it. After the queue is empty,
 // the default hook function is invoked for any future action.
 func (f *GitserverClientCommitDateFunc) PushHook(hook func(context.Context, int, string) (time.Time, error)) {
@@ -719,7 +720,7 @@ func (f *GitserverClientCommitGraphFunc) SetDefaultHook(hook func(context.Contex
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// CommitGraph method of the parent MockGitserverClient instance inovkes the
+// CommitGraph method of the parent MockGitserverClient instance invokes the
 // hook at the front of the queue and discards it. After the queue is empty,
 // the default hook function is invoked for any future action.
 func (f *GitserverClientCommitGraphFunc) PushHook(hook func(context.Context, int, gitserver.CommitGraphOptions) (*gitserver.CommitGraph, error)) {
@@ -831,7 +832,7 @@ func (f *GitserverClientHeadFunc) SetDefaultHook(hook func(context.Context, int)
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// Head method of the parent MockGitserverClient instance inovkes the hook
+// Head method of the parent MockGitserverClient instance invokes the hook
 // at the front of the queue and discards it. After the queue is empty, the
 // default hook function is invoked for any future action.
 func (f *GitserverClientHeadFunc) PushHook(hook func(context.Context, int) (string, error)) {

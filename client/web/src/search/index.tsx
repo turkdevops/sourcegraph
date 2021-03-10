@@ -1,10 +1,10 @@
 import { escapeRegExp } from 'lodash'
 import { replaceRange } from '../../../shared/src/util/strings'
-import { discreteValueAliases } from '../../../shared/src/search/query/filters'
+import { discreteValueAliases, escapeSpaces } from '../../../shared/src/search/query/filters'
 import { VersionContext } from '../schema/site.schema'
 import { SearchPatternType } from '../../../shared/src/graphql-operations'
 import { Observable } from 'rxjs'
-import { ISavedSearch } from '../../../shared/src/graphql/schema'
+import { ISavedSearch, ISearchContext } from '../../../shared/src/graphql/schema'
 import { EventLogResult } from './backend'
 import { AggregateStreamingSearchResults, StreamSearchOptions } from './stream'
 import { findFilter, FilterKind } from '../../../shared/src/search/query/validate'
@@ -119,9 +119,9 @@ export function parseSearchURL(
 
 export function repoFilterForRepoRevision(repoName: string, globbing: boolean, revision?: string): string {
     if (globbing) {
-        return `${quoteIfNeeded(`${repoName}${revision ? `@${abbreviateOID(revision)}` : ''}`)}`
+        return `${escapeSpaces(`${repoName}${revision ? `@${abbreviateOID(revision)}` : ''}`)}`
     }
-    return `${quoteIfNeeded(`^${escapeRegExp(repoName)}$${revision ? `@${abbreviateOID(revision)}` : ''}`)}`
+    return `${escapeSpaces(`^${escapeRegExp(repoName)}$${revision ? `@${abbreviateOID(revision)}` : ''}`)}`
 }
 
 export function searchQueryForRepoRevision(repoName: string, globbing: boolean, revision?: string): string {
@@ -177,6 +177,10 @@ export interface OnboardingTourProps {
 
 export interface SearchContextProps {
     showSearchContext: boolean
+    availableSearchContexts: ISearchContext[]
+    defaultSearchContextSpec: string
+    selectedSearchContextSpec?: string
+    setSelectedSearchContextSpec: (spec: string) => void
 }
 
 export interface ShowQueryBuilderProps {
@@ -223,4 +227,16 @@ export function resolveVersionContext(
     }
 
     return versionContext
+}
+
+export function isSearchContextSpecAvailable(spec: string, availableSearchContexts: ISearchContext[]): boolean {
+    return availableSearchContexts.map(item => item.spec).includes(spec)
+}
+
+export function resolveSearchContextSpec(
+    spec: string,
+    availableSearchContexts: ISearchContext[],
+    defaultSpec: string
+): string {
+    return isSearchContextSpecAvailable(spec, availableSearchContexts) ? spec : defaultSpec
 }

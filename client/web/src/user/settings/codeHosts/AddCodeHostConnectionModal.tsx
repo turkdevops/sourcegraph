@@ -3,6 +3,7 @@ import Dialog from '@reach/dialog'
 import ShieldCheckIcon from 'mdi-react/ShieldCheckIcon'
 
 import { Form } from '../../../../../branded/src/components/Form'
+import { LoaderButton } from '../../../components/LoaderButton'
 import { defaultExternalServices } from '../../../components/externalServices/externalServices'
 import { asError, ErrorLike } from '../../../../../shared/src/util/errors'
 import { addExternalService } from '../../../components/externalServices/backend'
@@ -72,11 +73,13 @@ export const AddCodeHostConnectionModal: React.FunctionComponent<{
     return (
         <Dialog
             className="modal-body modal-body--top-third p-4 rounded border"
-            aria-labelledby={`label--add-${kind}-token`}
+            aria-labelledby={`heading--connect-with-${name}`}
             onDismiss={onDidCancel}
         >
             <div className="web-content">
-                <h3 className="mb-4">Connect with {name}</h3>
+                <h3 id={`heading--connect-with-${name}`} className="mb-4">
+                    Connect with {name}
+                </h3>
                 <Form onSubmit={onTokenSubmit}>
                     <div className="form-group mb-4">
                         <label htmlFor="code-host-token">Personal access token</label>
@@ -88,6 +91,7 @@ export const AddCodeHostConnectionModal: React.FunctionComponent<{
                                 value={token}
                                 onChange={onChangeToken}
                                 className="form-control pr-4"
+                                autoComplete="off"
                             />
                             <ShieldCheckIcon
                                 className="icon-inline add-user-code-hosts-page__icon--inside text-muted"
@@ -101,9 +105,14 @@ export const AddCodeHostConnectionModal: React.FunctionComponent<{
                         <button type="button" className="btn btn-outline-secondary mr-2" onClick={onDidCancel}>
                             Cancel
                         </button>
-                        <button type="submit" disabled={!token || isLoading} className="btn btn-primary">
-                            Add code host connection
-                        </button>
+                        <LoaderButton
+                            type="submit"
+                            className="btn btn-primary"
+                            loading={isLoading}
+                            disabled={!token || isLoading}
+                            label="Add code host connection"
+                            alwaysShowLabel={true}
+                        />
                     </div>
                 </Form>
             </div>

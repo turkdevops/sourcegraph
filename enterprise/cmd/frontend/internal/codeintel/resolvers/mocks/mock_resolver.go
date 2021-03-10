@@ -4,10 +4,11 @@ package mocks
 
 import (
 	"context"
+	"sync"
+
 	graphqlbackend "github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend"
 	resolvers "github.com/sourcegraph/sourcegraph/enterprise/cmd/frontend/internal/codeintel/resolvers"
 	dbstore "github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/stores/dbstore"
-	"sync"
 )
 
 // MockResolver is a mock implementation of the Resolver interface (from the
@@ -81,8 +82,8 @@ func NewMockResolver() *MockResolver {
 			},
 		},
 		IndexConfigurationFunc: &ResolverIndexConfigurationFunc{
-			defaultHook: func(context.Context, int) (dbstore.IndexConfiguration, error) {
-				return dbstore.IndexConfiguration{}, nil
+			defaultHook: func(context.Context, int) ([]byte, error) {
+				return nil, nil
 			},
 		},
 		IndexConnectionResolverFunc: &ResolverIndexConnectionResolverFunc{
@@ -178,7 +179,7 @@ func (f *ResolverCommitGraphFunc) SetDefaultHook(hook func(context.Context, int)
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// CommitGraph method of the parent MockResolver instance inovkes the hook
+// CommitGraph method of the parent MockResolver instance invokes the hook
 // at the front of the queue and discards it. After the queue is empty, the
 // default hook function is invoked for any future action.
 func (f *ResolverCommitGraphFunc) PushHook(hook func(context.Context, int) (graphqlbackend.CodeIntelligenceCommitGraphResolver, error)) {
@@ -287,7 +288,7 @@ func (f *ResolverDeleteIndexByIDFunc) SetDefaultHook(hook func(context.Context, 
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// DeleteIndexByID method of the parent MockResolver instance inovkes the
+// DeleteIndexByID method of the parent MockResolver instance invokes the
 // hook at the front of the queue and discards it. After the queue is empty,
 // the default hook function is invoked for any future action.
 func (f *ResolverDeleteIndexByIDFunc) PushHook(hook func(context.Context, int) error) {
@@ -393,7 +394,7 @@ func (f *ResolverDeleteUploadByIDFunc) SetDefaultHook(hook func(context.Context,
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// DeleteUploadByID method of the parent MockResolver instance inovkes the
+// DeleteUploadByID method of the parent MockResolver instance invokes the
 // hook at the front of the queue and discards it. After the queue is empty,
 // the default hook function is invoked for any future action.
 func (f *ResolverDeleteUploadByIDFunc) PushHook(hook func(context.Context, int) error) {
@@ -499,7 +500,7 @@ func (f *ResolverGetIndexByIDFunc) SetDefaultHook(hook func(context.Context, int
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// GetIndexByID method of the parent MockResolver instance inovkes the hook
+// GetIndexByID method of the parent MockResolver instance invokes the hook
 // at the front of the queue and discards it. After the queue is empty, the
 // default hook function is invoked for any future action.
 func (f *ResolverGetIndexByIDFunc) PushHook(hook func(context.Context, int) (dbstore.Index, bool, error)) {
@@ -611,7 +612,7 @@ func (f *ResolverGetUploadByIDFunc) SetDefaultHook(hook func(context.Context, in
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// GetUploadByID method of the parent MockResolver instance inovkes the hook
+// GetUploadByID method of the parent MockResolver instance invokes the hook
 // at the front of the queue and discards it. After the queue is empty, the
 // default hook function is invoked for any future action.
 func (f *ResolverGetUploadByIDFunc) PushHook(hook func(context.Context, int) (dbstore.Upload, bool, error)) {
@@ -701,15 +702,15 @@ func (c ResolverGetUploadByIDFuncCall) Results() []interface{} {
 // ResolverIndexConfigurationFunc describes the behavior when the
 // IndexConfiguration method of the parent MockResolver instance is invoked.
 type ResolverIndexConfigurationFunc struct {
-	defaultHook func(context.Context, int) (dbstore.IndexConfiguration, error)
-	hooks       []func(context.Context, int) (dbstore.IndexConfiguration, error)
+	defaultHook func(context.Context, int) ([]byte, error)
+	hooks       []func(context.Context, int) ([]byte, error)
 	history     []ResolverIndexConfigurationFuncCall
 	mutex       sync.Mutex
 }
 
 // IndexConfiguration delegates to the next hook function in the queue and
 // stores the parameter and result values of this invocation.
-func (m *MockResolver) IndexConfiguration(v0 context.Context, v1 int) (dbstore.IndexConfiguration, error) {
+func (m *MockResolver) IndexConfiguration(v0 context.Context, v1 int) ([]byte, error) {
 	r0, r1 := m.IndexConfigurationFunc.nextHook()(v0, v1)
 	m.IndexConfigurationFunc.appendCall(ResolverIndexConfigurationFuncCall{v0, v1, r0, r1})
 	return r0, r1
@@ -718,15 +719,15 @@ func (m *MockResolver) IndexConfiguration(v0 context.Context, v1 int) (dbstore.I
 // SetDefaultHook sets function that is called when the IndexConfiguration
 // method of the parent MockResolver instance is invoked and the hook queue
 // is empty.
-func (f *ResolverIndexConfigurationFunc) SetDefaultHook(hook func(context.Context, int) (dbstore.IndexConfiguration, error)) {
+func (f *ResolverIndexConfigurationFunc) SetDefaultHook(hook func(context.Context, int) ([]byte, error)) {
 	f.defaultHook = hook
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// IndexConfiguration method of the parent MockResolver instance inovkes the
+// IndexConfiguration method of the parent MockResolver instance invokes the
 // hook at the front of the queue and discards it. After the queue is empty,
 // the default hook function is invoked for any future action.
-func (f *ResolverIndexConfigurationFunc) PushHook(hook func(context.Context, int) (dbstore.IndexConfiguration, error)) {
+func (f *ResolverIndexConfigurationFunc) PushHook(hook func(context.Context, int) ([]byte, error)) {
 	f.mutex.Lock()
 	f.hooks = append(f.hooks, hook)
 	f.mutex.Unlock()
@@ -734,21 +735,21 @@ func (f *ResolverIndexConfigurationFunc) PushHook(hook func(context.Context, int
 
 // SetDefaultReturn calls SetDefaultDefaultHook with a function that returns
 // the given values.
-func (f *ResolverIndexConfigurationFunc) SetDefaultReturn(r0 dbstore.IndexConfiguration, r1 error) {
-	f.SetDefaultHook(func(context.Context, int) (dbstore.IndexConfiguration, error) {
+func (f *ResolverIndexConfigurationFunc) SetDefaultReturn(r0 []byte, r1 error) {
+	f.SetDefaultHook(func(context.Context, int) ([]byte, error) {
 		return r0, r1
 	})
 }
 
 // PushReturn calls PushDefaultHook with a function that returns the given
 // values.
-func (f *ResolverIndexConfigurationFunc) PushReturn(r0 dbstore.IndexConfiguration, r1 error) {
-	f.PushHook(func(context.Context, int) (dbstore.IndexConfiguration, error) {
+func (f *ResolverIndexConfigurationFunc) PushReturn(r0 []byte, r1 error) {
+	f.PushHook(func(context.Context, int) ([]byte, error) {
 		return r0, r1
 	})
 }
 
-func (f *ResolverIndexConfigurationFunc) nextHook() func(context.Context, int) (dbstore.IndexConfiguration, error) {
+func (f *ResolverIndexConfigurationFunc) nextHook() func(context.Context, int) ([]byte, error) {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
@@ -789,7 +790,7 @@ type ResolverIndexConfigurationFuncCall struct {
 	Arg1 int
 	// Result0 is the value of the 1st result returned from this method
 	// invocation.
-	Result0 dbstore.IndexConfiguration
+	Result0 []byte
 	// Result1 is the value of the 2nd result returned from this method
 	// invocation.
 	Result1 error
@@ -834,7 +835,7 @@ func (f *ResolverIndexConnectionResolverFunc) SetDefaultHook(hook func(dbstore.G
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
 // IndexConnectionResolver method of the parent MockResolver instance
-// inovkes the hook at the front of the queue and discards it. After the
+// invokes the hook at the front of the queue and discards it. After the
 // queue is empty, the default hook function is invoked for any future
 // action.
 func (f *ResolverIndexConnectionResolverFunc) PushHook(hook func(dbstore.GetIndexesOptions) *resolvers.IndexesResolver) {
@@ -938,7 +939,7 @@ func (f *ResolverQueryResolverFunc) SetDefaultHook(hook func(context.Context, *g
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// QueryResolver method of the parent MockResolver instance inovkes the hook
+// QueryResolver method of the parent MockResolver instance invokes the hook
 // at the front of the queue and discards it. After the queue is empty, the
 // default hook function is invoked for any future action.
 func (f *ResolverQueryResolverFunc) PushHook(hook func(context.Context, *graphqlbackend.GitBlobLSIFDataArgs) (resolvers.QueryResolver, error)) {
@@ -1049,7 +1050,7 @@ func (f *ResolverQueueAutoIndexJobForRepoFunc) SetDefaultHook(hook func(context.
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
 // QueueAutoIndexJobForRepo method of the parent MockResolver instance
-// inovkes the hook at the front of the queue and discards it. After the
+// invokes the hook at the front of the queue and discards it. After the
 // queue is empty, the default hook function is invoked for any future
 // action.
 func (f *ResolverQueueAutoIndexJobForRepoFunc) PushHook(hook func(context.Context, int) error) {
@@ -1159,7 +1160,7 @@ func (f *ResolverUpdateIndexConfigurationByRepositoryIDFunc) SetDefaultHook(hook
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
 // UpdateIndexConfigurationByRepositoryID method of the parent MockResolver
-// instance inovkes the hook at the front of the queue and discards it.
+// instance invokes the hook at the front of the queue and discards it.
 // After the queue is empty, the default hook function is invoked for any
 // future action.
 func (f *ResolverUpdateIndexConfigurationByRepositoryIDFunc) PushHook(hook func(context.Context, int, string) error) {
@@ -1272,7 +1273,7 @@ func (f *ResolverUploadConnectionResolverFunc) SetDefaultHook(hook func(dbstore.
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
 // UploadConnectionResolver method of the parent MockResolver instance
-// inovkes the hook at the front of the queue and discards it. After the
+// invokes the hook at the front of the queue and discards it. After the
 // queue is empty, the default hook function is invoked for any future
 // action.
 func (f *ResolverUploadConnectionResolverFunc) PushHook(hook func(dbstore.GetUploadsOptions) *resolvers.UploadsResolver) {

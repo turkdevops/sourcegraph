@@ -20,9 +20,12 @@ import (
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/envvar"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/globals"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/hubspot"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/hubspot/hubspotutil"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/app/assetsutil"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/app/jscontext"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/handlerutil"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/routevar"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
@@ -30,7 +33,6 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/errcode"
 	"github.com/sourcegraph/sourcegraph/internal/gitserver"
 	"github.com/sourcegraph/sourcegraph/internal/repoupdater"
-	"github.com/sourcegraph/sourcegraph/internal/routevar"
 	"github.com/sourcegraph/sourcegraph/internal/types"
 	"github.com/sourcegraph/sourcegraph/internal/vcs"
 	"github.com/sourcegraph/sourcegraph/internal/vcs/git"
@@ -379,4 +381,39 @@ func searchBadgeHandler() *httputil.ReverseProxy {
 		},
 		ErrorLog: log.New(env.DebugOut, "search-badger proxy: ", log.LstdFlags),
 	}
+}
+
+func servePingFromSelfHosted(w http.ResponseWriter, r *http.Request) error {
+	// CORS to allow request from anywhere
+	u, err := url.Parse(r.Referer())
+	if err != nil {
+		return err
+	}
+	w.Header().Add("Access-Control-Allow-Origin", u.Host)
+	w.Header().Add("Access-Control-Allow-Credentials", "true")
+	if r.Method == http.MethodOptions {
+		// CORS preflight request, respond 204 and allow origin header
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	}
+	email := r.URL.Query().Get("email")
+
+	sourceURLCookie, err := r.Cookie("sourcegraphSourceUrl")
+	var sourceURL string
+	if err == nil && sourceURLCookie != nil {
+		sourceURL = sourceURLCookie.Value
+	}
+
+	anonymousUIDCookie, err := r.Cookie("sourcegraphAnonymousUid")
+	var anonymousUserId string
+	if err == nil && anonymousUIDCookie != nil {
+		anonymousUserId = anonymousUIDCookie.Value
+	}
+
+	hubspotutil.SyncUser(email, hubspotutil.SelfHostedSiteInitEventID, &hubspot.ContactProperties{
+		IsServerAdmin:   true,
+		AnonymousUserID: anonymousUserId,
+		FirstSourceURL:  sourceURL,
+	})
+	return nil
 }

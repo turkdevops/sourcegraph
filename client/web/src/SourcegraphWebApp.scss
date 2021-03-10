@@ -72,14 +72,6 @@ body,
     min-width: 0;
 }
 
-// Hide the given element from Percy.
-.percy-hide,
-.monaco-editor .cursor {
-    @media only percy {
-        visibility: hidden !important;
-    }
-}
-
 // Pages
 @import './Layout';
 @import './api/ApiConsole';
@@ -100,6 +92,7 @@ body,
 @import './tree/Tree';
 @import './nav/GlobalNavbar';
 @import './nav/NavLinks';
+@import './nav/IconRadioButtons.scss';
 @import './auth/ResetPasswordPage';
 @import './auth/SignInPage';
 @import './auth/SignUpPage';
@@ -123,11 +116,13 @@ body,
 @import './user/settings/UserSettingsArea';
 @import './user/settings/emails/UserSettingsEmailsPage.scss';
 @import './user/settings/codeHosts/UserAddCodeHostsPage.scss';
+@import './user/settings/auth/UserSettingsSecurityPage.scss';
 @import './site-admin/SiteAdminAlert';
 @import './site/DockerForMacAlert';
 @import './user/UserAvatar';
 @import './user/area/UserArea';
 @import './org/OrgsArea';
+@import './components/Badge';
 @import './components/Collapsible';
 @import './components/DismissibleAlert';
 @import './components/Timeline';
@@ -138,6 +133,7 @@ body,
 @import './components/SearchResultMatch';
 @import './components/diff/FileDiffNode';
 @import './components/externalServices/AddExternalServicesPage';
+@import './components/Sidebar';
 @import '../../branded/src/components/Tabs';
 @import '../../branded/src/components/panel/Panel';
 @import '../../branded/src/components/panel/views/FileLocations';

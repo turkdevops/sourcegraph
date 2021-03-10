@@ -1,4 +1,6 @@
 .user-settings-repos {
+    margin-bottom: 5rem;
+
     &__gitlab {
         fill: #ff5900 !important;
     }
@@ -56,7 +58,7 @@
         margin-bottom: 0.25rem;
         width: 1.5rem;
         height: 1.5rem;
-        font-size: 12px;
+        font-size: 0.75rem;
         &--active {
             background-color: inherit;
         }
@@ -73,6 +75,10 @@
 
     &__filter-input {
         max-width: 30% !important;
+    }
+
+    &__text-coming-soon {
+        color: var(--color-text-3);
     }
 }
 

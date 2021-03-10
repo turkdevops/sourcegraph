@@ -1,13 +1,13 @@
 import React, { useState, useCallback, useMemo, memo } from 'react'
 import WarningIcon from 'mdi-react/WarningIcon'
 import classNames from 'classnames'
-import { ConfiguredRegistryExtension } from '../../../shared/src/extensions/extension'
+import { ConfiguredRegistryExtension, splitExtensionID } from '../../../shared/src/extensions/extension'
 import * as GQL from '../../../shared/src/graphql/schema'
 import { PlatformContextProps } from '../../../shared/src/platform/context'
 import { ExtensionManifest } from '../../../shared/src/schema/extensionSchema'
 import { SettingsCascadeProps } from '../../../shared/src/settings/settings'
 import { isErrorLike } from '../../../shared/src/util/errors'
-import { isExtensionAdded, splitExtensionID } from './extension/extension'
+import { isExtensionAdded } from './extension/extension'
 import { ExtensionConfigurationState } from './extension/ExtensionConfigurationState'
 import { ExtensionToggle, OptimisticUpdateFailure } from './ExtensionToggle'
 import { isEncodedImage } from '../../../shared/src/util/icon'
@@ -29,6 +29,7 @@ interface Props extends SettingsCascadeProps, PlatformContextProps<'updateSettin
     >
     subject: Pick<GQL.SettingsSubject, 'id' | 'viewerCanAdminister'>
     enabled: boolean
+    settingsURL: string | null | undefined
 }
 
 const stopPropagation: React.MouseEventHandler<HTMLElement> = event => {
@@ -45,6 +46,7 @@ export const ExtensionCard = memo<Props>(function ExtensionCard({
     platformContext,
     subject,
     enabled,
+    settingsURL,
     isLightTheme,
 }) {
     const manifest: ExtensionManifest | undefined =
@@ -74,6 +76,24 @@ export const ExtensionCard = memo<Props>(function ExtensionCard({
             ),
         [extension]
     )
+
+    const actionableErrorMessage = (error: Error): JSX.Element => {
+        let errorMessage
+
+        if (error.message.startsWith('invalid settings') && settingsURL) {
+            errorMessage = (
+                <>
+                    Could not enable / disable {name}. Edit your <Link to={settingsURL}>user settings</Link> to fix this
+                    error. <br />
+                    <br /> ({error.message})
+                </>
+            )
+        } else {
+            errorMessage = <>{error.message}</>
+        }
+
+        return errorMessage
+    }
 
     /**
      * When extension enablement state changes, display visual feedback for $delay seconds.
@@ -173,11 +193,7 @@ export const ExtensionCard = memo<Props>(function ExtensionCard({
                         <div className="d-flex align-items-center">
                             <span className="mb-0 mr-1 text-truncate flex-1">
                                 <Link
-                                    to={`/extensions/${
-                                        extension.registryExtension
-                                            ? extension.registryExtension.extensionIDWithoutRegistry
-                                            : extension.id
-                                    }`}
+                                    to={`/extensions/${extension.id}`}
                                     className={classNames('font-weight-bold', change === 'enabled' ? 'alert-link' : '')}
                                 >
                                     {name}
@@ -256,8 +272,8 @@ export const ExtensionCard = memo<Props>(function ExtensionCard({
                 {/* Visual feedback: alert when optimistic update fails */}
                 {optimisticFailure && (
                     <div className="alert alert-danger px-2 py-1 extension-card__disabled-feedback">
-                        <span className="font-weight-semibold">Network Error:</span> {name} is{' '}
-                        {optimisticFailure.previousValue ? 'enabled' : 'disabled'} again
+                        <span className="font-weight-semibold">Error:</span>{' '}
+                        {actionableErrorMessage(optimisticFailure.error)}
                     </div>
                 )}
             </div>

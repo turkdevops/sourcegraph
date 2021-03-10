@@ -3,6 +3,7 @@ import Dialog from '@reach/dialog'
 import ShieldCheckIcon from 'mdi-react/ShieldCheckIcon'
 
 import { Form } from '../../../../../branded/src/components/Form'
+import { LoaderButton } from '../../../components/LoaderButton'
 import { asError, ErrorLike } from '../../../../../shared/src/util/errors'
 import { updateExternalService } from '../../../components/externalServices/backend'
 import { Scalars, ExternalServiceKind, ListExternalServiceFields } from '../../../graphql-operations'
@@ -28,7 +29,7 @@ export const UpdateCodeHostConnectionModal: React.FunctionComponent<{
     onDidError: (error: ErrorLike) => void
 
     hintFragment?: React.ReactFragment
-}> = ({ serviceId, serviceConfig, name, kind, hintFragment, onDidUpdate, onDidCancel, onDidError }) => {
+}> = ({ serviceId, serviceConfig, name, hintFragment, onDidUpdate, onDidCancel, onDidError }) => {
     const [token, setToken] = useState<string>('')
     const [isLoading, setIsLoading] = useState(false)
 
@@ -69,11 +70,13 @@ export const UpdateCodeHostConnectionModal: React.FunctionComponent<{
     return (
         <Dialog
             className="modal-body modal-body--top-third p-4 rounded border"
-            aria-labelledby={`label--update-${kind}-token`}
+            aria-labelledby={`heading--update-${name}-code-host`}
             onDismiss={onDidCancel}
         >
             <div className="web-content">
-                <h3 className="mb-4">Update {name} token</h3>
+                <h3 id={`heading--update-${name}-code-host`} className="mb-4">
+                    Update {name} token
+                </h3>
                 <Form onSubmit={onTokenSubmit}>
                     <div className="form-group mb-4">
                         <label htmlFor="code-host-token">Personal access token</label>
@@ -85,6 +88,7 @@ export const UpdateCodeHostConnectionModal: React.FunctionComponent<{
                                 value={token}
                                 onChange={onChangeToken}
                                 className="form-control pr-4"
+                                autoComplete="off"
                             />
                             <ShieldCheckIcon
                                 className="icon-inline add-user-code-hosts-page__icon--inside text-muted"
@@ -98,9 +102,14 @@ export const UpdateCodeHostConnectionModal: React.FunctionComponent<{
                         <button type="button" className="btn btn-outline-secondary mr-2" onClick={onDidCancel}>
                             Cancel
                         </button>
-                        <button type="submit" disabled={!token || isLoading} className="btn btn-primary">
-                            Update token
-                        </button>
+                        <LoaderButton
+                            type="submit"
+                            className="btn btn-primary"
+                            loading={isLoading}
+                            disabled={!token || isLoading}
+                            label="Update token"
+                            alwaysShowLabel={true}
+                        />
                     </div>
                 </Form>
             </div>

@@ -11,7 +11,9 @@ import (
 	searcherzoekt "github.com/sourcegraph/sourcegraph/cmd/searcher/search"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/comby"
+	"github.com/sourcegraph/sourcegraph/internal/database/dbutil"
 	"github.com/sourcegraph/sourcegraph/internal/search"
+	"github.com/sourcegraph/sourcegraph/internal/search/result"
 	"github.com/sourcegraph/sourcegraph/internal/search/streaming"
 	zoektutil "github.com/sourcegraph/sourcegraph/internal/search/zoekt"
 	"github.com/sourcegraph/sourcegraph/internal/types"
@@ -43,7 +45,7 @@ func buildQuery(args *search.TextParameters, repos *indexedRepoRevs, filePathPat
 // Timeouts are reported through the context, and as a special case errNoResultsInTimeout
 // is returned if no results are found in the given timeout (instead of the more common
 // case of finding partial or full results in the given timeout).
-func zoektSearchHEADOnlyFiles(ctx context.Context, args *search.TextParameters, repos *indexedRepoRevs, _ indexedRequestType, since func(t time.Time) time.Duration, c SearchStream) error {
+func zoektSearchHEADOnlyFiles(ctx context.Context, db dbutil.DB, args *search.TextParameters, repos *indexedRepoRevs, _ indexedRequestType, since func(t time.Time) time.Duration, c Sender) error {
 	var (
 		err       error
 		limitHit  bool
@@ -99,7 +101,7 @@ func zoektSearchHEADOnlyFiles(ctx context.Context, args *search.TextParameters, 
 
 	// Set all repos to "timed out"
 	if since(t0) >= searchOpts.MaxWallTime {
-		c <- SearchEvent{Stats: streaming.Stats{Status: mkStatusMap(search.RepoStatusTimedout | search.RepoStatusIndexed)}}
+		c.Send(SearchEvent{Stats: streaming.Stats{Status: mkStatusMap(search.RepoStatusTimedout)}})
 	}
 
 	// We always return approximate results (limitHit true) unless we run the branch to perform a more complete search.
@@ -116,7 +118,7 @@ func zoektSearchHEADOnlyFiles(ctx context.Context, args *search.TextParameters, 
 			return err
 		}
 		if since(t0) >= searchOpts.MaxWallTime {
-			c <- SearchEvent{Stats: streaming.Stats{Status: mkStatusMap(search.RepoStatusTimedout | search.RepoStatusIndexed)}}
+			c.Send(SearchEvent{Stats: streaming.Stats{Status: mkStatusMap(search.RepoStatusTimedout)}})
 		}
 		// This is the only place limitHit can be set false, meaning we covered everything.
 		limitHit = resp.FilesSkipped+resp.ShardsSkipped > 0
@@ -155,27 +157,28 @@ func zoektSearchHEADOnlyFiles(ctx context.Context, args *search.TextParameters, 
 		}
 		repoRev := repos.repoRevs[file.Repository]
 		if repoResolvers[repoRev.Repo.Name] == nil {
-			repoResolvers[repoRev.Repo.Name] = &RepositoryResolver{innerRepo: repoRev.Repo.ToRepo()}
+			repoResolvers[repoRev.Repo.Name] = NewRepositoryResolver(db, repoRev.Repo.ToRepo())
 		}
 		matches[i] = &FileMatchResolver{
-			FileMatch: FileMatch{
-				JPath:     file.FileName,
-				JLimitHit: fileLimitHit,
-				uri:       fileMatchURI(repoRev.Repo.Name, "", file.FileName),
-				Repo:      repoRev.Repo,
-				CommitID:  api.CommitID(file.Version),
+			db: db,
+			FileMatch: result.FileMatch{
+				Path:     file.FileName,
+				LimitHit: fileLimitHit,
+				URI:      fileMatchURI(repoRev.Repo.Name, "", file.FileName),
+				Repo:     repoRev.Repo,
+				CommitID: api.CommitID(file.Version),
 			},
 			RepoResolver: repoResolvers[repoRev.Repo.Name],
 		}
 	}
 
-	c <- SearchEvent{
+	c.Send(SearchEvent{
 		Results: matches,
 		Stats: streaming.Stats{
 			Status:     statusMap,
 			IsLimitHit: limitHit,
 		},
-	}
+	})
 
 	return nil
 }

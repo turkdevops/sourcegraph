@@ -13,8 +13,8 @@ import (
 	"strings"
 
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/cloneurls"
 	"github.com/sourcegraph/sourcegraph/internal/api"
-	"github.com/sourcegraph/sourcegraph/internal/cloneurls"
 )
 
 func editorRev(ctx context.Context, repoName api.RepoName, rev string, beExplicit bool) (string, error) {
@@ -177,7 +177,7 @@ func (r *editorRequest) openFileRedirect(ctx context.Context) (string, error) {
 	if repoName == "" {
 		// Any error here is a problem with the user's configured git remote
 		// URL. We want them to actually read this error message.
-		return "", fmt.Errorf("Git remote URL %q not supported", of.remoteURL)
+		return "", fmt.Errorf("git remote URL %q not supported", of.remoteURL)
 	}
 
 	inputRev, beExplicit := of.revision, true

@@ -24,7 +24,6 @@ import { VersionContextProps } from '../../../../shared/src/search/util'
 import { VersionContext } from '../../schema/site.schema'
 import { ViewGrid } from '../../repo/tree/ViewGrid'
 import { useObservable } from '../../../../shared/src/util/useObservable'
-import { getViewsForContainer } from '../../../../shared/src/api/client/services/viewService'
 import { isErrorLike } from '../../../../shared/src/util/errors'
 import { ContributableViewContainer } from '../../../../shared/src/api/protocol'
 import { EMPTY } from 'rxjs'
@@ -38,6 +37,7 @@ import { TelemetryProps } from '../../../../shared/src/telemetry/telemetryServic
 import { HomePanels } from '../panels/HomePanels'
 import { SearchPageFooter } from './SearchPageFooter'
 import { SyntaxHighlightedSearchQuery } from '../../components/SyntaxHighlightedSearchQuery'
+import { getCombinedViews } from '../../insights/backend'
 
 export interface SearchPageProps
     extends SettingsCascadeProps<Settings>,
@@ -88,20 +88,22 @@ export const SearchPage: React.FunctionComponent<SearchPageProps> = props => {
 
     useEffect(() => props.telemetryService.logViewEvent('Home'), [props.telemetryService])
 
-    const codeInsightsEnabled =
-        !isErrorLike(props.settingsCascade.final) && !!props.settingsCascade.final?.experimentalFeatures?.codeInsights
+    const showCodeInsights =
+        !isErrorLike(props.settingsCascade.final) &&
+        !!props.settingsCascade.final?.experimentalFeatures?.codeInsights &&
+        props.settingsCascade.final['insights.displayLocation.homepage'] !== false
 
     const views = useObservable(
         useMemo(
             () =>
-                codeInsightsEnabled
-                    ? getViewsForContainer(
+                showCodeInsights
+                    ? getCombinedViews(
                           ContributableViewContainer.Homepage,
                           {},
                           props.extensionsController.services.view
                       )
                     : EMPTY,
-            [codeInsightsEnabled, props.extensionsController.services.view]
+            [showCodeInsights, props.extensionsController.services.view]
         )
     )
     return (
@@ -135,6 +137,7 @@ export const SearchPage: React.FunctionComponent<SearchPageProps> = props => {
                                         <img
                                             className="search-page__repogroup-list-icon mr-2"
                                             src={repogroup.homepageIcon}
+                                            alt={`${repogroup.name} icon`}
                                         />
                                         <div className="d-flex flex-column">
                                             <Link
