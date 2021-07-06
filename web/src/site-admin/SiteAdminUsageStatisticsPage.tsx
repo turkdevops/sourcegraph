@@ -11,17 +11,14 @@ import { Timestamp } from '../components/time/Timestamp'
 import { eventLogger } from '../tracking/eventLogger'
 import { fetchSiteUsageStatistics, fetchUserUsageStatistics } from './backend'
 import { ErrorAlert } from '../components/alerts'
+import FileDownloadIcon from 'mdi-react/FileDownloadIcon'
 
 interface ChartData {
     label: string
     dateFormat: string
 }
 
-interface ChartOptions {
-    daus: ChartData
-    waus: ChartData
-    maus: ChartData
-}
+type ChartOptions = Record<'daus' | 'waus' | 'maus', ChartData>
 
 const chartGeneratorOptions: ChartOptions = {
     daus: { label: 'Daily unique users', dateFormat: 'E, MMM d' },
@@ -141,7 +138,7 @@ class UserUsageStatisticsNode extends React.PureComponent<UserUsageStatisticsNod
                     {this.props.node.usageStatistics && this.props.node.usageStatistics.lastActiveTime ? (
                         <Timestamp date={this.props.node.usageStatistics.lastActiveTime} />
                     ) : (
-                        'n/a'
+                        'never'
                     )}
                 </td>
                 <td className="site-admin-usage-statistics-page__date-column">
@@ -149,7 +146,7 @@ class UserUsageStatisticsNode extends React.PureComponent<UserUsageStatisticsNod
                     this.props.node.usageStatistics.lastActiveCodeHostIntegrationTime ? (
                         <Timestamp date={this.props.node.usageStatistics.lastActiveCodeHostIntegrationTime} />
                     ) : (
-                        'n/a'
+                        'never'
                     )}
                 </td>
             </tr>
@@ -237,10 +234,20 @@ export class SiteAdminUsageStatisticsPage extends React.Component<
         return (
             <div className="site-admin-usage-statistics-page">
                 <PageTitle title="Usage statistics - Admin" />
-                <div className="d-flex justify-content-between align-items-center mt-3 mb-1">
-                    <h2 className="mb-0">Usage statistics</h2>
-                </div>
-                {this.state.error && <ErrorAlert className="mb-3" error={this.state.error} />}
+                <h2>Usage statistics</h2>
+                {this.state.error && (
+                    <ErrorAlert className="mb-3" error={this.state.error} history={this.props.history} />
+                )}
+
+                <a
+                    href="/site-admin/usage-statistics/archive"
+                    className="btn btn-secondary"
+                    data-tooltip="Download usage stats archive"
+                    download="true"
+                >
+                    <FileDownloadIcon className="icon-inline" /> Download usage stats archive
+                </a>
+
                 {this.state.stats && (
                     <>
                         <RadioButtons

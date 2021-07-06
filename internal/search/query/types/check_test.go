@@ -119,7 +119,7 @@ func TestCheck(t *testing.T) {
 			if err != nil {
 				return
 			}
-			if got := toTestValueMap(query.Fields); !reflect.DeepEqual(got, test.want) {
+			if got := toTestValueMap(*query); !reflect.DeepEqual(got, test.want) {
 				t.Errorf("fields\ngot  %+v\nwant %+v", got, test.want)
 			}
 		})
@@ -154,7 +154,7 @@ func TestRegexpCompile(t *testing.T) {
 	})
 }
 
-func Test_autoFix(t *testing.T) {
+func TestAutoFix(t *testing.T) {
 	t.Run("handcrafted cases", func(t *testing.T) {
 		tests := []struct {
 			pat  string

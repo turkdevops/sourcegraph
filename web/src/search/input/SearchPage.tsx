@@ -6,6 +6,7 @@ import {
     InteractiveSearchProps,
     CaseSensitivityProps,
     SmartSearchFieldProps,
+    CopyQueryButtonProps,
 } from '..'
 import { ActivationProps } from '../../../../shared/src/components/activation/Activation'
 import * as GQL from '../../../../shared/src/graphql/schema'
@@ -25,11 +26,15 @@ import { LazyMonacoQueryInput } from './LazyMonacoQueryInput'
 import { SearchButton } from './SearchButton'
 import { SearchScopes } from './SearchScopes'
 import { InteractiveModeInput } from './interactive/InteractiveModeInput'
-import { KeyboardShortcutsProps } from '../../keyboardShortcuts/keyboardShortcuts'
+import { KeyboardShortcutsProps, KEYBOARD_SHORTCUT_FOCUS_SEARCHBAR } from '../../keyboardShortcuts/keyboardShortcuts'
 import { ExtensionsControllerProps } from '../../../../shared/src/extensions/controller'
 import { PlatformContextProps } from '../../../../shared/src/platform/context'
 import { SearchModeToggle } from './interactive/SearchModeToggle'
 import { Link } from '../../../../shared/src/components/Link'
+import { BrandLogo } from '../../components/branding/BrandLogo'
+import { VersionContextDropdown } from '../../nav/VersionContextDropdown'
+import { VersionContextProps } from '../../../../shared/src/search/util'
+import { VersionContext } from '../../schema/site.schema'
 
 interface Props
     extends SettingsCascadeProps,
@@ -43,11 +48,15 @@ interface Props
         ExtensionsControllerProps<'executeCommand' | 'services'>,
         PlatformContextProps<'forceUpdateTooltip' | 'settings'>,
         InteractiveSearchProps,
-        SmartSearchFieldProps {
+        SmartSearchFieldProps,
+        CopyQueryButtonProps,
+        VersionContextProps {
     authenticatedUser: GQL.IUser | null
     location: H.Location
     history: H.History
     isSourcegraphDotCom: boolean
+    setVersionContext: (versionContext: string | undefined) => void
+    availableVersionContexts: VersionContext[] | undefined
 
     // For NavLinks
     authRequired?: boolean
@@ -67,7 +76,7 @@ interface State {
 export class SearchPage extends React.Component<Props, State> {
     constructor(props: Props) {
         super(props)
-        const queryFromUrl = parseSearchURLQuery(props.location.search, props.interactiveSearchMode) || ''
+        const queryFromUrl = parseSearchURLQuery(props.location.search) || ''
         this.state = {
             userQueryState: {
                 query: queryFromUrl,
@@ -82,37 +91,24 @@ export class SearchPage extends React.Component<Props, State> {
     }
 
     public render(): JSX.Element | null {
-        let logoUrl =
-            `${window.context.assetsRoot}/img/sourcegraph` +
-            (this.props.isLightTheme ? '-light' : '') +
-            '-head-logo.svg'
-        const { branding } = window.context
-        if (branding) {
-            if (this.props.isLightTheme) {
-                if (branding.light && branding.light.logo) {
-                    logoUrl = branding.light.logo
-                }
-            } else if (branding.dark && branding.dark.logo) {
-                logoUrl = branding.dark.logo
-            }
-        }
         const quickLinks = this.getQuickLinks()
         return (
             <div className="search-page">
                 <PageTitle title={this.getPageTitle()} />
-                <img className="search-page__logo" src={logoUrl} />
-                <div className="search search-page__container">
-                    <div className="d-flex flex-row">
+                <BrandLogo className="search-page__logo" isLightTheme={this.props.isLightTheme} />
+                <div className="search-page__container">
+                    <div className="d-flex flex-row flex-shrink-past-contents">
                         {this.props.splitSearchModes && this.props.interactiveSearchMode ? (
                             <InteractiveModeInput
                                 {...this.props}
                                 navbarSearchState={this.state.userQueryState}
                                 onNavbarQueryChange={this.onUserQueryChange}
                                 toggleSearchMode={this.props.toggleSearchMode}
+                                lowProfile={false}
                             />
                         ) : (
                             <>
-                                <Form className="search flex-grow-1" onSubmit={this.onFormSubmit}>
+                                <Form className="flex-grow-1 flex-shrink-past-contents" onSubmit={this.onFormSubmit}>
                                     <div className="search-page__input-container">
                                         {this.props.splitSearchModes && (
                                             <SearchModeToggle
@@ -120,7 +116,15 @@ export class SearchPage extends React.Component<Props, State> {
                                                 interactiveSearchMode={this.props.interactiveSearchMode}
                                             />
                                         )}
-
+                                        <VersionContextDropdown
+                                            history={this.props.history}
+                                            caseSensitive={this.props.caseSensitive}
+                                            patternType={this.props.patternType}
+                                            navbarSearchQuery={this.state.userQueryState.query}
+                                            versionContext={this.props.versionContext}
+                                            setVersionContext={this.props.setVersionContext}
+                                            availableVersionContexts={this.props.availableVersionContexts}
+                                        />
                                         {this.props.smartSearchField ? (
                                             <LazyMonacoQueryInput
                                                 {...this.props}
@@ -140,7 +144,8 @@ export class SearchPage extends React.Component<Props, State> {
                                                 patternType={this.props.patternType}
                                                 setPatternType={this.props.setPatternType}
                                                 withSearchModeToggle={this.props.splitSearchModes}
-                                            ></QueryInput>
+                                                keyboardShortcutForFocus={KEYBOARD_SHORTCUT_FOCUS_SEARCHBAR}
+                                            />
                                         )}
                                         <SearchButton />
                                     </div>
@@ -156,6 +161,7 @@ export class SearchPage extends React.Component<Props, State> {
                                             authenticatedUser={this.props.authenticatedUser}
                                             settingsCascade={this.props.settingsCascade}
                                             patternType={this.props.patternType}
+                                            versionContext={this.props.versionContext}
                                         />
                                     </div>
                                     <QuickLinks quickLinks={quickLinks} className="search-page__input-sub-container" />
@@ -163,6 +169,7 @@ export class SearchPage extends React.Component<Props, State> {
                                         className="my-3"
                                         location="home"
                                         settingsCascade={this.props.settingsCascade}
+                                        history={this.props.history}
                                     />
                                 </Form>
                             </>
@@ -179,14 +186,11 @@ export class SearchPage extends React.Component<Props, State> {
 
     private onSubmit = (): void => {
         const query = [this.state.builderQuery, this.state.userQueryState.query].filter(s => !!s).join(' ')
-        submitSearch(
-            this.props.history,
+        submitSearch({
+            ...this.props,
             query,
-            'home',
-            this.props.patternType,
-            this.props.caseSensitive,
-            this.props.activation
-        )
+            source: 'home',
+        })
     }
 
     private onFormSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
@@ -195,7 +199,7 @@ export class SearchPage extends React.Component<Props, State> {
     }
 
     private getPageTitle(): string | undefined {
-        const query = parseSearchURLQuery(this.props.location.search, this.props.interactiveSearchMode)
+        const query = parseSearchURLQuery(this.props.location.search)
         if (query) {
             return `${limitString(this.state.userQueryState.query, 25, true)}`
         }

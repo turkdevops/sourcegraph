@@ -7,6 +7,7 @@ import { RepoNotFoundError } from '../../../../../shared/src/backend/errors'
 import { LoadingSpinner } from '@sourcegraph/react-loading-spinner'
 import { asError } from '../../../../../shared/src/util/errors'
 import { ErrorAlert } from '../../../components/alerts'
+import * as H from 'history'
 
 async function addChangeset({
     campaignID,
@@ -36,7 +37,7 @@ async function addChangeset({
     const changeset = dataOrThrowErrors(
         await mutateGraphQL(
             gql`
-                mutation CreateChangeSet($repositoryID: ID!, $externalID: String!) {
+                mutation CreateChangeset($repositoryID: ID!, $externalID: String!) {
                     createChangesets(input: { repository: $repositoryID, externalID: $externalID }) {
                         id
                     }
@@ -63,9 +64,10 @@ async function addChangeset({
 /**
  * Simple, temporary form to add changesets.
  */
-export const AddChangesetForm: React.FunctionComponent<{ campaignID: ID; onAdd: () => void }> = ({
+export const AddChangesetForm: React.FunctionComponent<{ campaignID: ID; onAdd: () => void; history: H.History }> = ({
     campaignID,
     onAdd,
+    history,
 }) => {
     const [error, setError] = useState<Error>()
     const [repoName, setRepoName] = useState('')
@@ -90,31 +92,52 @@ export const AddChangesetForm: React.FunctionComponent<{ campaignID: ID; onAdd: 
     )
     return (
         <>
-            <Form className="form-inline" onSubmit={submit}>
-                <input
-                    required={true}
-                    type="text"
-                    size={35}
-                    className="form-control mr-1"
-                    placeholder="Repository name"
-                    value={repoName}
-                    onChange={event => setRepoName(event.target.value)}
-                />
-                <input
-                    required={true}
-                    type="text"
-                    size={16}
-                    className="form-control mr-1"
-                    placeholder="Changeset number"
-                    value={externalID}
-                    onChange={event => setExternalID(event.target.value)}
-                />
-                <button type="submit" className="btn btn-primary mr-1">
+            <h3 className="mb-2 mt-4">Add changeset</h3>
+            <Form onSubmit={submit}>
+                <div className="d-flex">
+                    <div className="form-group mr-3 mb-0">
+                        <label htmlFor="changeset-repo">Repository path</label>
+                        <input
+                            required={true}
+                            id="changeset-repo"
+                            type="text"
+                            size={35}
+                            className="form-control mr-1 e2e-track-changeset-repo"
+                            placeholder="codehost.example.com/example-org/example-repository"
+                            value={repoName}
+                            onChange={event => setRepoName(event.target.value)}
+                        />
+                        <p className="form-text text-muted">
+                            The location of the repository in Sourcegraph. See the repository's directory URL:{' '}
+                            {window.location.protocol}//
+                            {window.location.host}/<strong>&lt;REPOSITORY_PATH&gt;</strong>
+                            <br />
+                            (Depending on your instance's configuration the path may or may not contain the code host
+                            name)
+                        </p>
+                    </div>
+                    <div className="form-group mr-3 mb-0">
+                        <label htmlFor="changeset-number">Changeset number</label>
+                        <input
+                            required={true}
+                            id="changeset-number"
+                            type="number"
+                            min={1}
+                            step={1}
+                            size={16}
+                            className="form-control mr-1 e2e-track-changeset-id"
+                            placeholder="1234"
+                            value={externalID}
+                            onChange={event => setExternalID(event.target.value + '')}
+                        />
+                    </div>
+                </div>
+                <button type="submit" className="btn btn-primary mr-1 e2e-track-changeset-btn" disabled={isLoading}>
                     Add changeset
+                    {isLoading && <LoadingSpinner className="ml-2 icon-inline" />}
                 </button>
-                {isLoading && <LoadingSpinner className="icon-inline" />}
             </Form>
-            {error && <ErrorAlert error={error} />}
+            {error && <ErrorAlert error={error} className="mt-2" history={history} />}
         </>
     )
 }

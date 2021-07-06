@@ -64,7 +64,10 @@ func init() {
 	conf.ContributeWarning(func(c conf.Unified) (problems conf.Problems) {
 		if c.ExternalURL == "" {
 			problems = append(problems, conf.NewSiteProblem("`externalURL` is required to be set for many features of Sourcegraph to work correctly."))
+		} else if conf.DeployType() != conf.DeployDev && strings.HasPrefix(c.ExternalURL, "http://") {
+			problems = append(problems, conf.NewSiteProblem("Your connection is not private. We recommend [configuring Sourcegraph to use HTTPS/SSL](https://docs.sourcegraph.com/admin/nginx)"))
 		}
+
 		return problems
 	})
 
@@ -103,15 +106,6 @@ func init() {
 		}
 
 		alerts := make([]*Alert, 0, 2)
-
-		criticalProblems := problems.Critical()
-		if len(criticalProblems) > 0 {
-			alerts = append(alerts, &Alert{
-				TypeValue: AlertTypeWarning,
-				MessageValue: `[**Update critical configuration**](/help/admin/management_console) to resolve problems:` +
-					"\n* " + strings.Join(criticalProblems.Messages(), "\n* "),
-			})
-		}
 
 		siteProblems := problems.Site()
 		if len(siteProblems) > 0 {

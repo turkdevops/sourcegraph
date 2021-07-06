@@ -16,10 +16,12 @@ import { eventLogger } from '../../tracking/eventLogger'
 import { deleteRegistryExtensionWithConfirmation } from '../extensions/registry/backend'
 import { RegistryExtensionSourceBadge } from '../extensions/registry/RegistryExtensionSourceBadge'
 import { ErrorAlert } from '../../components/alerts'
+import * as H from 'history'
 
 interface RegistryExtensionNodeSiteAdminProps {
     node: GQL.IRegistryExtension
     onDidUpdate: () => void
+    history: H.History
 }
 
 interface RegistryExtensionNodeSiteAdminState {
@@ -121,7 +123,7 @@ class RegistryExtensionNodeSiteAdminRow extends React.PureComponent<
                     </div>
                 </div>
                 {isErrorLike(this.state.deletionOrError) && (
-                    <ErrorAlert className="mt-2" error={this.state.deletionOrError} />
+                    <ErrorAlert className="mt-2" error={this.state.deletionOrError} history={this.props.history} />
                 )}
             </li>
         )
@@ -162,14 +164,15 @@ export class SiteAdminRegistryExtensionsPage extends React.PureComponent<Props> 
     }
 
     public render(): JSX.Element | null {
-        const nodeProps: Pick<RegistryExtensionNodeSiteAdminProps, 'onDidUpdate'> = {
+        const nodeProps: Omit<RegistryExtensionNodeSiteAdminProps, 'node'> = {
             onDidUpdate: this.onDidUpdateRegistryExtension,
+            history: this.props.history,
         }
 
         return (
             <div className="registry-extensions-page">
                 <PageTitle title="Registry extensions" />
-                <div className="d-flex justify-content-between align-items-center mt-3 mb-3">
+                <div className="d-flex justify-content-between align-items-center mb-3">
                     <h2 className="mb-0">Registry extensions</h2>
                     <div>
                         <Link className="btn btn-link mr-sm-2" to="/extensions">
@@ -184,7 +187,7 @@ export class SiteAdminRegistryExtensionsPage extends React.PureComponent<Props> 
                     Extensions add features to Sourcegraph and other connected tools (such as editors, code hosts, and
                     code review tools).
                 </p>
-                <FilteredConnection<GQL.IRegistryExtension, Pick<RegistryExtensionNodeSiteAdminProps, 'onDidUpdate'>>
+                <FilteredConnection<GQL.IRegistryExtension, Omit<RegistryExtensionNodeSiteAdminProps, 'node'>>
                     className="list-group list-group-flush registry-extensions-list"
                     listComponent="ul"
                     noun="extension"

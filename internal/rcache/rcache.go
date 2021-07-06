@@ -7,9 +7,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/gomodule/redigo/redis"
+	"github.com/inconshreveable/log15"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/redispool"
-	"gopkg.in/inconshreveable/log15.v2"
 )
 
 // dataVersion is used for releases that change type structure for
@@ -67,6 +67,11 @@ func (r *Cache) GetMulti(keys ...string) [][]byte {
 
 	strVals := make([][]byte, len(vals))
 	for i, val := range vals {
+		// MGET returns nil as not found.
+		if val == nil {
+			continue
+		}
+
 		b, err := redis.Bytes(val, nil)
 		if err != nil {
 			log15.Warn("failed to parse bytes from Redis value", "value", val)

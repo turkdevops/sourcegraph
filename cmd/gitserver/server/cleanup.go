@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/fnv"
+	"io"
 	"io/ioutil"
-	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,38 +18,37 @@ import (
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
+	"github.com/sourcegraph/sourcegraph/internal/api"
+	"github.com/sourcegraph/sourcegraph/internal/lazyregexp"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	"gopkg.in/inconshreveable/log15.v2"
+	"github.com/inconshreveable/log15"
 )
-
-func init() {
-	prometheus.MustRegister(reposRemoved)
-	prometheus.MustRegister(reposRecloned)
-}
 
 const (
 	// repoTTL is how often we should reclone a repository
 	repoTTL = time.Hour * 24 * 45
 	// repoTTLGC is how often we should reclone a repository once it is
 	// reporting git gc issues.
-	repoTTLGC = time.Hour * 24
+	repoTTLGC = time.Hour * 24 * 2
 )
 
-var reposRemoved = prometheus.NewCounter(prometheus.CounterOpts{
-	Namespace: "src",
-	Subsystem: "gitserver",
-	Name:      "repos_removed",
-	Help:      "number of repos removed during cleanup",
-})
-
-var reposRecloned = prometheus.NewCounter(prometheus.CounterOpts{
-	Namespace: "src",
-	Subsystem: "gitserver",
-	Name:      "repos_recloned",
-	Help:      "number of repos removed and recloned due to age",
-})
+var (
+	reposRemoved = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "src_gitserver_repos_removed",
+		Help: "number of repos removed during cleanup",
+	})
+	reposRecloned = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "src_gitserver_repos_recloned",
+		Help: "number of repos removed and recloned due to age",
+	})
+	reposRemovedDiskPressure = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "src_gitserver_repos_removed_disk_pressure",
+		Help: "number of repos removed due to not enough disk space",
+	})
+)
 
 // cleanupRepos walks the repos directory and performs maintenance tasks:
 //
@@ -89,10 +89,15 @@ func (s *Server) cleanupRepos() {
 		// Add a jitter to spread out recloning of repos cloned at the same
 		// time.
 		var reason string
-		if time.Since(recloneTime) > repoTTL+randDuration(repoTTL/4) {
+		if maybeCorrupt, _ := gitConfigGet(dir, "sourcegraph.maybeCorruptRepo"); maybeCorrupt != "" {
+			reason = "maybeCorrupt"
+			// unset flag to stop constantly recloning if it fails.
+			_ = gitConfigUnset(dir, "sourcegraph.maybeCorruptRepo")
+		}
+		if time.Since(recloneTime) > repoTTL+jitterDuration(string(dir), repoTTL/4) {
 			reason = "old"
 		}
-		if time.Since(recloneTime) > repoTTLGC+randDuration(repoTTLGC/4) {
+		if time.Since(recloneTime) > repoTTLGC+jitterDuration(string(dir), repoTTLGC/4) {
 			if gclog, err := ioutil.ReadFile(dir.Path("gc.log")); err == nil && len(gclog) > 0 {
 				reason = fmt.Sprintf("git gc %s", string(bytes.TrimSpace(gclog)))
 			}
@@ -107,6 +112,14 @@ func (s *Server) cleanupRepos() {
 		// name is the relative path to ReposDir, but without the .git suffix.
 		repo := s.name(dir)
 		log15.Info("recloning expired repo", "repo", repo, "cloned", recloneTime, "reason", reason)
+
+		// update the reclone time so that we don't constantly reclone if
+		// cloning fails. For example if a repo fails to clone due to being
+		// large, we will constantly be doing a clone which uses up lots of
+		// resources.
+		if err := setRecloneTime(dir, recloneTime.Add(time.Since(recloneTime)/2)); err != nil {
+			log15.Warn("setting backed off reclone time failed", "repo", repo, "cloned", recloneTime, "reason", reason, "error", err)
+		}
 
 		remoteURL, err := repoRemoteURL(ctx, dir)
 		if err != nil {
@@ -166,12 +179,12 @@ func (s *Server) cleanupRepos() {
 		// We always want to have the same git attributes file at
 		// info/attributes.
 		{"ensure git attributes", ensureGitAttributes},
+		// Old git clones accumulate loose git objects that waste space and
+		// slow down git operations. Periodically do a fresh clone to avoid
+		// these problems. git gc is slow and resource intensive. It is
+		// cheaper and faster to just reclone the repository.
+		{"maybe reclone", maybeReclone},
 	}
-	// Old git clones accumulate loose git objects that waste space and
-	// slow down git operations. Periodically do a fresh clone to avoid
-	// these problems. git gc is slow and resource intensive. It is
-	// cheaper and faster to just reclone the repository.
-	cleanups = append(cleanups, cleanupFn{"maybe reclone", maybeReclone})
 
 	err := bestEffortWalk(s.ReposDir, func(dir string, fi os.FileInfo) error {
 		if s.ignorePath(dir) {
@@ -225,18 +238,13 @@ type DiskSizer interface {
 // howManyBytesToFree returns the number of bytes that should be freed to make sure
 // there is sufficient disk space free to satisfy s.DesiredPercentFree.
 func (s *Server) howManyBytesToFree() (int64, error) {
-	// Check how much disk space is available.
-	mountPoint, err := findMountPoint(s.ReposDir)
-	if err != nil {
-		return 0, errors.Wrap(err, "finding mount point for dir containing repos")
-	}
-	actualFreeBytes, err := s.DiskSizer.BytesFreeOnDisk(mountPoint)
+	actualFreeBytes, err := s.DiskSizer.BytesFreeOnDisk(s.ReposDir)
 	if err != nil {
 		return 0, errors.Wrap(err, "finding the amount of space free on disk")
 	}
 
 	// Free up space if necessary.
-	diskSizeBytes, err := s.DiskSizer.DiskSizeBytes(mountPoint)
+	diskSizeBytes, err := s.DiskSizer.DiskSizeBytes(s.ReposDir)
 	if err != nil {
 		return 0, errors.Wrap(err, "getting disk size")
 	}
@@ -249,8 +257,7 @@ func (s *Server) howManyBytesToFree() (int64, error) {
 	log15.Debug("cleanup",
 		"desired percent free", s.DesiredPercentFree,
 		"actual percent free", float64(actualFreeBytes)/float64(diskSizeBytes)*100.0,
-		"amount to free in GiB", float64(howManyBytesToFree)/G,
-		"mount point", mountPoint)
+		"amount to free in GiB", float64(howManyBytesToFree)/G)
 	return howManyBytesToFree, nil
 }
 
@@ -274,61 +281,13 @@ func (s *StatDiskSizer) DiskSizeBytes(mountPoint string) (uint64, error) {
 	return free, nil
 }
 
-// findMountPoint searches upwards starting from the directory d to find the mount point.
-func findMountPoint(d string) (string, error) {
-	d, err := filepath.Abs(d)
-	if err != nil {
-		return "", errors.Wrapf(err, "getting absolute version of %s", d)
-	}
-	for {
-		m, err := isMount(d)
-		if err != nil {
-			return "", errors.Wrapf(err, "finding out if %s is a mount point", d)
-		}
-		if m {
-			return d, nil
-		}
-		d2 := filepath.Dir(d)
-		if d2 == d {
-			return d2, nil
-		}
-		d = d2
-	}
-}
-
-// isMount tells whether the directory d is a mount point.
-func isMount(d string) (bool, error) {
-	ddev, err := device(d)
-	if err != nil {
-		return false, errors.Wrapf(err, "gettting device id for %s", d)
-	}
-	parent := filepath.Dir(d)
-	if parent == d {
-		return true, nil
-	}
-	pdev, err := device(parent)
-	if err != nil {
-		return false, errors.Wrapf(err, "getting device id for %s", parent)
-	}
-	return pdev != ddev, nil
-}
-
-// device gets the device id of a file f.
-func device(f string) (int64, error) {
-	fi, err := os.Stat(f)
-	if err != nil {
-		return 0, errors.Wrapf(err, "running stat on %s", f)
-	}
-	stat, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, fmt.Errorf("failed to get stat details for %s", f)
-	}
-	return int64(stat.Dev), nil
-}
-
 // freeUpSpace removes git directories under ReposDir, in order from least
 // recently to most recently used, until it has freed howManyBytesToFree.
 func (s *Server) freeUpSpace(howManyBytesToFree int64) error {
+	if howManyBytesToFree <= 0 {
+		return nil
+	}
+
 	// Get the git directories and their mod times.
 	gitDirs, err := s.findGitDirs()
 	if err != nil {
@@ -350,11 +309,7 @@ func (s *Server) freeUpSpace(howManyBytesToFree int64) error {
 
 	// Remove repos until howManyBytesToFree is met or exceeded.
 	var spaceFreed int64
-	mountPoint, err := findMountPoint(s.ReposDir)
-	if err != nil {
-		return errors.Wrap(err, "finding mount point")
-	}
-	diskSizeBytes, err := s.DiskSizer.DiskSizeBytes(mountPoint)
+	diskSizeBytes, err := s.DiskSizer.DiskSizeBytes(s.ReposDir)
 	if err != nil {
 		return errors.Wrap(err, "getting disk size")
 	}
@@ -370,9 +325,10 @@ func (s *Server) freeUpSpace(howManyBytesToFree int64) error {
 			return errors.Wrap(err, "removing repo directory")
 		}
 		spaceFreed += delta
+		reposRemovedDiskPressure.Inc()
 
 		// Report the new disk usage situation after removing this repo.
-		actualFreeBytes, err := s.DiskSizer.BytesFreeOnDisk(mountPoint)
+		actualFreeBytes, err := s.DiskSizer.BytesFreeOnDisk(s.ReposDir)
 		if err != nil {
 			return errors.Wrap(err, "finding the amount of space free on disk")
 		}
@@ -587,6 +543,15 @@ func (s *Server) SetupAndClearTmp() (string, error) {
 	return dir, nil
 }
 
+// setRecloneTime sets the time a repository is cloned.
+func setRecloneTime(dir GitDir, now time.Time) error {
+	err := gitConfigSet(dir, "sourcegraph.recloneTimestamp", strconv.FormatInt(now.Unix(), 10))
+	if err != nil {
+		return errors.Wrap(err, "failed to update recloneTimestamp")
+	}
+	return nil
+}
+
 // getRecloneTime returns an approximate time a repository is cloned. If the
 // value is not stored in the repository, the reclone time for the repository
 // is set to now.
@@ -596,26 +561,18 @@ func getRecloneTime(dir GitDir) (time.Time, error) {
 	// different ways a clone can appear in gitserver.
 	update := func() (time.Time, error) {
 		now := time.Now()
-		cmd := exec.Command("git", "config", "--add", "sourcegraph.recloneTimestamp", strconv.FormatInt(time.Now().Unix(), 10))
-		cmd.Dir = string(dir)
-		if _, err := cmd.Output(); err != nil {
-			return now, errors.Wrap(wrapCmdError(cmd, err), "failed to update recloneTimestamp")
-		}
-		return now, nil
+		return now, setRecloneTime(dir, now)
 	}
 
-	cmd := exec.Command("git", "config", "--get", "sourcegraph.recloneTimestamp")
-	cmd.Dir = string(dir)
-	out, err := cmd.Output()
+	value, err := gitConfigGet(dir, "sourcegraph.recloneTimestamp")
 	if err != nil {
-		// Exit code 1 means the key is not set.
-		if ee, ok := err.(*exec.ExitError); ok && ee.Sys().(syscall.WaitStatus).ExitStatus() == 1 {
-			return update()
-		}
-		return time.Unix(0, 0), errors.Wrap(wrapCmdError(cmd, err), "failed to determine clone timestamp")
+		return time.Unix(0, 0), errors.Wrap(err, "failed to determine clone timestamp")
+	}
+	if value == "" {
+		return update()
 	}
 
-	sec, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 0)
+	sec, err := strconv.ParseInt(strings.TrimSpace(value), 10, 0)
 	if err != nil {
 		// If the value is bad update it to the current time
 		now, err2 := update()
@@ -628,9 +585,79 @@ func getRecloneTime(dir GitDir) (time.Time, error) {
 	return time.Unix(sec, 0), nil
 }
 
-// randDuration returns a psuedo-random duration between [0, d)
-func randDuration(d time.Duration) time.Duration {
-	return time.Duration(rand.Int63n(int64(d)))
+// maybeCorruptStderrRe matches stderr lines from git which indicate there
+// might be repository corruption.
+//
+// See https://github.com/sourcegraph/sourcegraph/issues/6676 for more
+// context.
+var maybeCorruptStderrRe = lazyregexp.NewPOSIX(`^error: (Could not read|packfile) `)
+
+func checkMaybeCorruptRepo(repo api.RepoName, dir GitDir, stderr string) {
+	if !maybeCorruptStderrRe.MatchString(stderr) {
+		return
+	}
+
+	log15.Warn("marking repo for recloning due to stderr output indicating repo corruption", "repo", repo, "stderr", stderr)
+
+	// We set a flag in the config for the cleanup janitor job to fix. The
+	// janitor runs every minute.
+	err := gitConfigSet(dir, "sourcegraph.maybeCorruptRepo", strconv.FormatInt(time.Now().Unix(), 10))
+	if err != nil {
+		log15.Error("failed to set maybeCorruptRepo config", repo, "repo", "error", err)
+	}
+}
+
+func gitConfigGet(dir GitDir, key string) (string, error) {
+	cmd := exec.Command("git", "config", "--get", key)
+	cmd.Dir = string(dir)
+	out, err := cmd.Output()
+	if err != nil {
+		// Exit code 1 means the key is not set.
+		if ee, ok := err.(*exec.ExitError); ok && ee.Sys().(syscall.WaitStatus).ExitStatus() == 1 {
+			return "", nil
+		}
+		return "", errors.Wrapf(wrapCmdError(cmd, err), "failed to get git config %s", key)
+	}
+	return string(out), nil
+}
+
+func gitConfigSet(dir GitDir, key, value string) error {
+	cmd := exec.Command("git", "config", key, value)
+	cmd.Dir = string(dir)
+	err := cmd.Run()
+	if err != nil {
+		return errors.Wrapf(wrapCmdError(cmd, err), "failed to set git config %s", key)
+	}
+	return nil
+}
+
+func gitConfigUnset(dir GitDir, key string) error {
+	cmd := exec.Command("git", "config", "--unset-all", key)
+	cmd.Dir = string(dir)
+	err := cmd.Run()
+	if err != nil {
+		// Exit code 5 means the key is not set.
+		if ee, ok := err.(*exec.ExitError); ok && ee.Sys().(syscall.WaitStatus).ExitStatus() == 5 {
+			return nil
+		}
+		return errors.Wrapf(wrapCmdError(cmd, err), "failed to unset git config %s", key)
+	}
+	return nil
+}
+
+// jitterDuration returns a duration between [0, d) based on key. This is like
+// a random duration, but instead of a random source it is computed via a hash
+// on key.
+func jitterDuration(key string, d time.Duration) time.Duration {
+	h := fnv.New64()
+	_, _ = io.WriteString(h, key)
+	r := time.Duration(h.Sum64())
+	if r < 0 {
+		// +1 because we have one more negative value than positive. ie
+		// math.MinInt64 == -math.MinInt64.
+		r = -(r + 1)
+	}
+	return r % d
 }
 
 // wrapCmdError will wrap errors for cmd to include the arguments. If the error

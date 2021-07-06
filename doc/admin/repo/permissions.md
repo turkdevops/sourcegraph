@@ -10,7 +10,7 @@ Currently, GitHub, GitHub Enterprise, GitLab and Bitbucket Server permissions ar
 
 Prerequisite: [Add GitHub as an authentication provider.](../auth/index.md#github)
 
-Then, [add or edit a GitHub external service](../external_service/github.md#repository-syncing) and include the `authorization` field:
+Then, [add or edit a GitHub connection](../external_service/github.md#repository-syncing) and include the `authorization` field:
 
 ```json
 {
@@ -36,7 +36,7 @@ GitLab permissions can be configured in three ways:
 
 Prerequisite: [Add GitLab as an authentication provider.](../auth/index.md#gitlab)
 
-Then, [add or edit a GitLab external service](../external_service/gitlab.md#repository-syncing) and include the `authorization` field:
+Then, [add or edit a GitLab connection](../external_service/gitlab.md#repository-syncing) and include the `authorization` field:
 
 ```json
 {
@@ -56,7 +56,7 @@ Then, [add or edit a GitLab external service](../external_service/gitlab.md#repo
 Prerequisite: Add the [SAML](../auth/index.md#saml) or [OpenID Connect](../auth/index.md#openid-connect)
 authentication provider you use to sign into GitLab.
 
-Then, [add or edit a GitLab external service](../external_service/gitlab.md#repository-syncing) and include the `authorization` field:
+Then, [add or edit a GitLab connection](../external_service/gitlab.md#repository-syncing) and include the `authorization` field:
 
 ```json
 {
@@ -85,7 +85,7 @@ Prerequisite: Ensure that `http-header` is the *only* authentication provider ty
 Sourcegraph. If this is not the case, then it will be possible for users to escalate privileges,
 because Sourcegraph usernames are mutable.
 
-[Add or edit a GitLab external service](../external_service/gitlab.md#repository-syncing) and include the `authorization` field:
+[Add or edit a GitLab connection](../external_service/gitlab.md#repository-syncing) and include the `authorization` field:
 
 ```json
 {
@@ -102,7 +102,7 @@ because Sourcegraph usernames are mutable.
 
 ## Bitbucket Server
 
-Enforcing Bitbucket Server permissions can be configured via the `authorization` setting in its external service configuration.
+Enforcing Bitbucket Server permissions can be configured via the `authorization` setting in its configuration.
 
 ### Prerequisites
 
@@ -113,7 +113,7 @@ Enforcing Bitbucket Server permissions can be configured via the `authorization`
 
 ### Setup
 
-This section walks you through the process of setting up an *Application Link between Sourcegraph and Bitbucket Server* and configuring the Bitbucket Server external service with `authorization` settings. It assumes the above prerequisites are met.
+This section walks you through the process of setting up an *Application Link between Sourcegraph and Bitbucket Server* and configuring the Sourcegraph Bitbucket Server configuration with `authorization` settings. It assumes the above prerequisites are met.
 
 As an admin user, go to the "Application Links" page. You can use the sidebar navigation in the admin dashboard, or go directly to [https://bitbucketserver.example.com/plugins/servlet/applinks/listApplicationLinks](https://bitbucketserver.example.com/plugins/servlet/applinks/listApplicationLinks).
 
@@ -159,48 +159,95 @@ Scroll to the bottom and check the *Allow 2-Legged OAuth* checkbox, then write y
 
 ---
 
-Go to your Sourcegraph's external services page (i.e. `https://sourcegraph.example.com/site-admin/external-services`) and either edit or create a new *Bitbucket Server* external service. Click on the *Enforce permissions* quick action on top of the configuration editor. Copy the *Consumer Key* you generated before to the `oauth.consumerKey` field and the output of the command `base64 sourcegraph.pem | tr -d '\n'` to the `oauth.signingKey` field.
+Go to your Sourcegraph's *Manage repositories* page (i.e. `https://sourcegraph.example.com/site-admin/external-services`) and either edit or create a new *Bitbucket Server* connection. Click on the *Enforce permissions* quick action on top of the configuration editor. Copy the *Consumer Key* you generated before to the `oauth.consumerKey` field and the output of the command `base64 sourcegraph.pem | tr -d '\n'` to the `oauth.signingKey` field.
 
 <img src="https://imgur.com/ucetesA.png" width="800">
 
 ---
 
+### Caching
+
 Permissions for each user are cached for the configured `ttl` duration (**3h** by default). When the `ttl` expires for a given user, during request that needs to be authorized, permissions will be refetched from Bitbucket Server again in the background, during which time the previously cached permissions will be used to authorize the user's actions. A lower `ttl` makes Sourcegraph refresh permissions for each user more often which increases load on Bitbucket Server, so have that in consideration when changing this value.
 
 The default `hardTTL` is **3 days**, after which a user's cached permissions must be updated before any user action can be authorized. While the update is happening an error is returned to the user. The default `hardTTL` value was chosen so that it reduces the chances of users being forced to wait for their permissions to be updated after a weekend of inactivity.
+
+### Fast permission sync with Bitbucket Server plugin
+
+By installing the [Bitbucket Server plugin](../../../integration/bitbucket_server.md), you can make use of the fast permission sync feature that allows using Bitbucket Server permissions on larger instances.
 
 ---
 
 Finally, **save the configuration**. You're done!
 
+## Background permissions syncing
+
+Starting with 3.14, Sourcegraph supports syncing permissions in the background to better handle repository permissions at scale. Rather than syncing a user's permissions when they log in and potentially blocking them from seeing search results, Sourcegraph syncs these permissions asynchronously in the background, opportunistically refreshing them in a timely manner.
+
+Background permissions syncing is currently behind a feature flag in the [site configuration](../config/site_config.md):
+
+```json
+"permissions.backgroundSync": {
+	"enabled": true
+}
+```
+
+>NOTE: Support for GitHub has been added in 3.15. Previously, only GitLab and Bitbucket Server were supported.
+
+Background permissions syncing has the following benefits:
+
+1. More predictable load on the code host API due to maintaining a schedule of permission updates.
+1. Permissions are quickly synced for new repositories added to the Sourcegraph instance.
+1. Users who sign up on the Sourcegraph instance can immediately get search results from the repositories they have access to on the code host.
+
+Since the syncing of permissions happens in the background, there are a few things to keep in mind:
+
+1. While the initial sync for all repositories and users is happening, users can gradually see more and more search results from repositories they have access to.
+1. It takes time to complete the first sync. Depending on how many private repositories and users you have on the Sourcegraph instance, it can take from a few minutes to several hours. This is generally not a problem for fresh installations, since admins should only make the instance available after it's ready, but for existing installations, active users may not see the repositories they expect in search results because the initial permissions syncing hasn't finished yet.
+1. More requests to the code host API need to be done during the first sync, but their pace is controlled with rate limiting.
+
+Please contact [support@sourcegraph.com](mailto:support@sourcegraph.com) if you have any concerns/questions about enabling this feature for your Sourcegraph instance.
+
+### Complete sync vs incremental sync
+
+A complete sync means a repository or user has done a repository-centric or user-centric syncing respectively, which presists the most accurate permissions from code hosts to Sourcegraph.
+
+An incremental sync is in fact a side effect of a complete sync because a user may grant or lose access to repositories and we react to such changes as soon as we know to improve permissions accuracy.
+
 ## Explicit permissions API
 
-Sourcegraph exposes a GraphQL API to explicitly set repository ACLs. This will become the primary
+Sourcegraph exposes a GraphQL API to explicitly set repository permissions. This will become the primary
 way to specify permissions in the future and will eventually replace the other repository
 permissions mechanisms.
 
-To enable the permissions API, add the following to the [site config](../config/site_config.md):
+To enable the permissions API, add the following to the [site configuration](../config/site_config.md):
 
 ```json
 "permissions.userMapping": {
     "enabled": true,
     "bindID": "email"
-},
+}
 ```
 
-> The `bindID` value is used to uniquely identify users when setting permissions. Alternatively, it
-> can be set to `"username"` if that is preferable to email.
+The `bindID` value specifies how to uniquely identify users when setting permissions:
 
-The following GraphQL calls can be tested out in the [GraphQL API
-console](../../api/graphql.md#api-console), which is accessible at the URL path `/api/console` on any
-Sourcegraph instance.
+- `email`: You can [set permissions](#settings-repository-permissions-for-users) for users by specifying their email addresses (which must be verified emails associated with their Sourcegraph user account).
+- `username`: You can [set permissions](#settings-repository-permissions-for-users) for users by specifying their Sourcegraph usernames.
 
-Setting the permissions for a repository can be accomplished with two GraphQL API calls. First,
-obtain the ID of the repository from its name:
+If the permissions API is enabled, all other repository permissions mechanisms are disabled.
+
+After you enable the permissions API, you must [set permissions](#settings-repository-permissions-for-users) to allow users to view repositories. (Site admins bypass all permissions checks and can always view all repositories.) 
+
+> If you were previously using [background permissions syncing](#background-permissions-syncing), then those permissions are used as the initial state. Otherwise, the initial state is for all repositories to have an empty set of authorized users, so users will not be able to view any repositories.
+
+### Setting repository permissions for users
+
+Setting the permissions for a repository can be accomplished with 2 [GraphQL API](../../api/graphql.md) calls.
+
+First, obtain the ID of the repository from its name:
 
 ```graphql
-{
-  repository(name:"github.com/owner/repo"){
+query {
+  repository(name: "github.com/owner/repo") {
     id
   }
 }
@@ -210,18 +257,27 @@ Next, set the list of users allowed to view the repository:
 
 ```graphql
 mutation {
-  setRepositoryPermissionsForUsers(repository: "<repo ID>", bindIDs: ["user@example.com"]) {
+  setRepositoryPermissionsForUsers(
+    repository: "<repo ID>", 
+    userPermissions: [
+      { bindID: "user@example.com" }
+    ]) {
     alwaysNil
   }
 }
 ```
 
-You may query the set of repositories visible to a particular user with the
-`authorizedUserRepositories` endpoint, which accepts either username or email:
+Now, only the users specified in the `userPermissions` parameter will be allowed to view the repository. Sourcegraph automatically enforces these permissions for all operations. (Site admins bypass all permissions checks and can always view all repositories.)
+
+You can call `setRepositoryPermissionsForUsers` repeatedly to set permissions for each repository, and whenever you want to change the list of authorized users.
+
+### Listing a user's authorized repositories
+
+You may query the set of repositories visible to a particular user with the `authorizedUserRepositories` [GraphQL API](../../api/graphql.md) mutation, which accepts a `username` or `email` parameter to specify the user:
 
 ```graphql
 query {
-  authorizedUserRepositories(email:"user@example.com", first:100) {
+  authorizedUserRepositories(email: "user@example.com", first: 100) {
     nodes {
       name
     }

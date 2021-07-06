@@ -1,11 +1,9 @@
 import { Position } from '@sourcegraph/extension-api-types'
-import { isArray } from 'lodash'
 import { concat, from, of, Subscription, Unsubscribable } from 'rxjs'
 import { first } from 'rxjs/operators'
 import { Services } from '../api/client/services'
-import { KeyPath, SettingsEdit } from '../api/client/services/settings'
+import { KeyPath, SettingsEdit, updateSettings } from '../api/client/services/settings'
 import { ActionContributionClientCommandUpdateConfiguration, Evaluated } from '../api/protocol'
-import { gql } from '../graphql/graphql'
 import { PlatformContext } from '../platform/context'
 
 /**
@@ -14,8 +12,8 @@ import { PlatformContext } from '../platform/context'
  * documentation.
  */
 export function registerBuiltinClientCommands(
-    { settings: settingsService, commands: commandRegistry, textDocumentLocations }: Services,
-    context: Pick<PlatformContext, 'requestGraphQL'>
+    { commands: commandRegistry, textDocumentLocations }: Services,
+    context: Pick<PlatformContext, 'requestGraphQL' | 'telemetryService' | 'settings' | 'updateSettings'>
 ): Unsubscribable {
     const subscription = new Subscription()
 
@@ -72,7 +70,7 @@ export function registerBuiltinClientCommands(
                 const args = anyArgs as Evaluated<
                     ActionContributionClientCommandUpdateConfiguration
                 >['commandArguments']
-                return settingsService.update(convertUpdateConfigurationCommandArgs(args))
+                return updateSettings(context, convertUpdateConfigurationCommandArgs(args))
             },
         })
     )
@@ -92,13 +90,26 @@ export function registerBuiltinClientCommands(
                 // from being sent to Sourcegraph.com.
                 from(
                     context.requestGraphQL({
-                        request: gql`
-                            ${query}
-                        `,
+                        request: query,
                         variables,
                         mightContainPrivateInfo: true,
                     })
                 ).toPromise(),
+        })
+    )
+
+    /**
+     * Sends a telemetry event to the Sourcegraph instance with the correct anonymous user id.
+     */
+    subscription.add(
+        commandRegistry.registerCommand({
+            command: 'logTelemetryEvent',
+            run: (eventName: string, eventProperties?: any): Promise<any> => {
+                if (context.telemetryService) {
+                    context.telemetryService.log(eventName, eventProperties)
+                }
+                return Promise.resolve()
+            },
         })
     )
 
@@ -118,10 +129,7 @@ export function urlForOpenPanel(viewID: string, urlHash: string): string {
     params.set('tab', viewID)
     // In the URL fragment, the 'L1:2-3:4' is treated as a parameter with no value. Undo the escaping of ':'
     // and the addition of the '=' for the empty value, for aesthetic reasons.
-    const paramsString = params
-        .toString()
-        .replace(/%3A/g, ':')
-        .replace(/=&/g, '&')
+    const paramsString = params.toString().replace(/%3A/g, ':').replace(/=&/g, '&')
     return `#${paramsString}`
 }
 
@@ -133,7 +141,7 @@ export function urlForOpenPanel(viewID: string, urlHash: string): string {
 export function convertUpdateConfigurationCommandArgs(
     args: Evaluated<ActionContributionClientCommandUpdateConfiguration>['commandArguments']
 ): SettingsEdit {
-    if (!isArray(args) || !(args.length >= 2 && args.length <= 4)) {
+    if (!Array.isArray(args) || !(args.length >= 2 && args.length <= 4)) {
         throw new Error(
             `invalid updateConfiguration arguments: ${JSON.stringify(
                 args
@@ -142,7 +150,7 @@ export function convertUpdateConfigurationCommandArgs(
     }
 
     let keyPath: KeyPath
-    if (isArray(args[0])) {
+    if (Array.isArray(args[0])) {
         keyPath = args[0]
     } else if (typeof args[0] === 'string') {
         // For convenience, allow the 1st arg (the key path) to be a string, and interpret this as referring to the

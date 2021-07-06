@@ -7,6 +7,7 @@ import (
 
 	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/graph-gophers/graphql-go/relay"
+	"github.com/sourcegraph/sourcegraph/cmd/frontend/auth/providers"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/db"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/envvar"
@@ -115,6 +116,10 @@ func (r *UserResolver) DisplayName() *string {
 	return &r.user.DisplayName
 }
 
+func (r *UserResolver) BuiltinAuth() bool {
+	return r.user.BuiltinAuth && providers.BuiltinAuthEnabled()
+}
+
 func (r *UserResolver) AvatarURL() *string {
 	if r.user.AvatarURL == "" {
 		return nil
@@ -172,12 +177,14 @@ func (r *UserResolver) SiteAdmin(ctx context.Context) (bool, error) {
 	return r.user.SiteAdmin, nil
 }
 
-func (*schemaResolver) UpdateUser(ctx context.Context, args *struct {
+type updateUserArgs struct {
 	User        graphql.ID
 	Username    *string
 	DisplayName *string
 	AvatarURL   *string
-}) (*EmptyResponse, error) {
+}
+
+func (*schemaResolver) UpdateUser(ctx context.Context, args *updateUserArgs) (*EmptyResponse, error) {
 	userID, err := UnmarshalUserID(args.User)
 	if err != nil {
 		return nil, err
@@ -200,7 +207,7 @@ func (*schemaResolver) UpdateUser(ctx context.Context, args *struct {
 	}
 	if args.Username != nil {
 		if !viewerCanChangeUsername(ctx, userID) {
-			return nil, fmt.Errorf("unable to change username because auth.disableUsernameChanges is true in critical config")
+			return nil, fmt.Errorf("unable to change username because auth.enableUsernameChanges is false in site configuration")
 		}
 		update.Username = *args.Username
 	}
@@ -282,6 +289,10 @@ func (r *UserResolver) URLForSiteAdminBilling(ctx context.Context) (*string, err
 
 func (r *UserResolver) NamespaceName() string { return r.user.Username }
 
+func (r *UserResolver) PermissionsInfo(ctx context.Context) (PermissionsInfoResolver, error) {
+	return EnterpriseResolvers.authzResolver.UserPermissionsInfo(ctx, r.ID())
+}
+
 func (r *schemaResolver) UpdatePassword(ctx context.Context, args *struct {
 	OldPassword string
 	NewPassword string
@@ -314,6 +325,5 @@ func viewerCanChangeUsername(ctx context.Context, userID int32) bool {
 		return true
 	}
 	// 🚨 SECURITY: Only site admins are allowed to change a user's username when auth.enableUsernameChanges == false.
-	isSiteAdminErr := backend.CheckCurrentUserIsSiteAdmin(ctx)
-	return isSiteAdminErr == nil
+	return backend.CheckCurrentUserIsSiteAdmin(ctx) == nil
 }

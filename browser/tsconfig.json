@@ -2,14 +2,24 @@
   "extends": "../tsconfig.json",
   "references": [{ "path": "../shared" }, { "path": "../schema" }],
   "compilerOptions": {
-    "module": "esnext",
-    "typeRoots": ["src/types", "../shared/src/types", "../node_modules/@types", "../node_modules/web-ext-types"],
+    "module": "commonjs",
+    "baseUrl": ".",
+    "paths": {
+      "*": ["src/types/*", "../shared/src/types/*", "*"],
+    },
     "jsx": "react",
     "resolveJsonModule": true,
     "rootDir": ".",
     "outDir": "out",
+    "plugins": [
+      {
+        "name": "ts-graphql-plugin",
+        "schema": "../cmd/frontend/graphqlbackend/schema.graphql",
+        "tag": "gql",
+      },
+    ],
   },
-  "include": ["./**/*", "./src/**/*.json"],
+  "include": ["./**/*", "./src/**/*.json", "src/types/**/*.d.ts"],
   "exclude": [
     "out",
     "node_modules",
@@ -17,5 +27,6 @@
     "./build/**/*",
     "coverage",
     "stories", // TODO fix type errors and include
+    "src/e2e",
   ],
 }

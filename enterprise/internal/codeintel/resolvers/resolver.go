@@ -7,16 +7,20 @@ import (
 	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend"
-	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/lsifserver/client"
 	"github.com/sourcegraph/sourcegraph/internal/api"
+	"github.com/sourcegraph/sourcegraph/internal/codeintel/lsifserver/client"
 )
 
-type Resolver struct{}
+type Resolver struct {
+	lsifserverClient *client.Client
+}
 
 var _ graphqlbackend.CodeIntelResolver = &Resolver{}
 
-func NewResolver() graphqlbackend.CodeIntelResolver {
-	return &Resolver{}
+func NewResolver(lsifserverClient *client.Client) graphqlbackend.CodeIntelResolver {
+	return &Resolver{
+		lsifserverClient: lsifserverClient,
+	}
 }
 
 func (r *Resolver) LSIFUploadByID(ctx context.Context, id graphql.ID) (graphqlbackend.LSIFUploadResolver, error) {
@@ -25,7 +29,7 @@ func (r *Resolver) LSIFUploadByID(ctx context.Context, id graphql.ID) (graphqlba
 		return nil, err
 	}
 
-	lsifUpload, err := client.DefaultClient.GetUpload(ctx, &struct {
+	lsifUpload, err := r.lsifserverClient.GetUpload(ctx, &struct {
 		UploadID int64
 	}{
 		UploadID: uploadID,
@@ -48,7 +52,7 @@ func (r *Resolver) DeleteLSIFUpload(ctx context.Context, id graphql.ID) (*graphq
 		return nil, err
 	}
 
-	err = client.DefaultClient.DeleteUpload(ctx, &struct {
+	err = r.lsifserverClient.DeleteUpload(ctx, &struct {
 		UploadID int64
 	}{
 		UploadID: uploadID,
@@ -64,7 +68,7 @@ func (r *Resolver) DeleteLSIFUpload(ctx context.Context, id graphql.ID) (*graphq
 //
 // This method implements cursor-based forward pagination. The `after` parameter
 // should be an `endCursor` value from a previous request. This value is the rel="next"
-// URL in the Link header of the LSIF server response. This URL includes all of the
+// URL in the Link header of the LSIF API server response. This URL includes all of the
 // query variables required to fetch the subsequent page of results. This state is not
 // dependent on the limit, so we can overwrite this value if the user has changed its
 // value since making the last request.
@@ -87,35 +91,33 @@ func (r *Resolver) LSIFUploads(ctx context.Context, args *graphqlbackend.LSIFRep
 		opt.NextURL = &nextURL
 	}
 
-	return &lsifUploadConnectionResolver{opt: opt}, nil
+	return &lsifUploadConnectionResolver{lsifserverClient: r.lsifserverClient, opt: opt}, nil
 }
 
 func (r *Resolver) LSIF(ctx context.Context, args *graphqlbackend.LSIFQueryArgs) (graphqlbackend.LSIFQueryResolver, error) {
-	upload, err := client.DefaultClient.Exists(ctx, &struct {
-		RepoID   api.RepoID
-		RepoName api.RepoName
-		Commit   string
-		Path     string
+	uploads, err := r.lsifserverClient.Exists(ctx, &struct {
+		RepoID api.RepoID
+		Commit api.CommitID
+		Path   string
 	}{
-		RepoID:   args.RepoID,
-		RepoName: args.RepoName,
-		Commit:   string(args.Commit),
-		Path:     args.Path,
+		RepoID: args.Repository.Type().ID,
+		Commit: args.Commit,
+		Path:   args.Path,
 	})
 
 	if err != nil {
 		return nil, err
 	}
 
-	if upload == nil {
+	if len(uploads) == 0 {
 		return nil, nil
 	}
 
 	return &lsifQueryResolver{
-		repoID:   args.RepoID,
-		repoName: args.RepoName,
-		commit:   args.Commit,
-		path:     args.Path,
-		upload:   upload,
+		lsifserverClient:   r.lsifserverClient,
+		repositoryResolver: args.Repository,
+		commit:             args.Commit,
+		path:               args.Path,
+		uploads:            uploads,
 	}, nil
 }

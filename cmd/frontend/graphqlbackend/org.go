@@ -5,6 +5,7 @@ import (
 
 	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/graph-gophers/graphql-go/relay"
+	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/db"
@@ -13,7 +14,6 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/errcode"
-	log15 "gopkg.in/inconshreveable/log15.v2"
 )
 
 func (r *schemaResolver) Organization(ctx context.Context, args struct{ Name string }) (*OrgResolver, error) {
@@ -250,13 +250,14 @@ func (*schemaResolver) AddUserToOrganization(ctx context.Context, args *struct {
 	Organization graphql.ID
 	Username     string
 }) (*EmptyResponse, error) {
-	var orgID int32
-	if err := relay.UnmarshalSpec(args.Organization, &orgID); err != nil {
-		return nil, err
-	}
 	// 🚨 SECURITY: Must be a site admin to immediately add a user to an organization (bypassing the
 	// invitation step).
 	if err := backend.CheckCurrentUserIsSiteAdmin(ctx); err != nil {
+		return nil, err
+	}
+
+	var orgID int32
+	if err := relay.UnmarshalSpec(args.Organization, &orgID); err != nil {
 		return nil, err
 	}
 

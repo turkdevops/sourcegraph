@@ -62,7 +62,7 @@ function getModeFromExtension(ext: string): string | undefined {
         case 'sh':
         case 'bash':
         case 'zsh':
-            return 'bash'
+            return 'shell'
 
         // Clojure
         case 'clj':
@@ -91,7 +91,7 @@ function getModeFromExtension(ext: string): string | undefined {
         // C#
         case 'cs':
         case 'csx':
-            return 'cs'
+            return 'csharp'
 
         // C++
         case 'c':
@@ -102,6 +102,7 @@ function getModeFromExtension(ext: string): string | undefined {
         case 'h++':
         case 'hh':
         case 'h':
+        case 'hpp':
             return 'cpp'
 
         // CUDA
@@ -159,6 +160,14 @@ function getModeFromExtension(ext: string): string | undefined {
         case 'go':
             return 'go'
 
+        // GraphQL
+        case 'graphql':
+            return 'graphql'
+
+        // Groovy
+        case 'groovy':
+            return 'groovy'
+
         // HAML
         case 'haml':
             return 'haml'
@@ -210,6 +219,11 @@ function getModeFromExtension(ext: string): string | undefined {
         case 'sublime-settings':
         case 'sublime-workspace':
             return 'json'
+
+        // Jsonnet
+        case 'jsonnet':
+        case 'libsonnet':
+            return 'jsonnet'
 
         // Julia
         case 'jl':
@@ -276,6 +290,12 @@ function getModeFromExtension(ext: string): string | undefined {
         case 'mly':
         case 're': // reason has the same language server as ocaml
             return 'ocaml'
+
+        // Pascal
+        case 'p':
+        case 'pas':
+        case 'pp':
+            return 'pascal'
 
         // Perl
         case 'pl':
@@ -409,10 +429,18 @@ function getModeFromExtension(ext: string): string | undefined {
         case 'vbs':
             return 'vbscrip'
 
-        // Verilog
+        // Verilog, including SystemVerilog
         case 'v':
         case 'veo':
+        case 'sv':
+        case 'svh':
+        case 'svi':
             return 'verilog'
+
+        // VHDL
+        case 'vhd':
+        case 'vhdl':
+            return 'vhdl'
 
         // VIM
         case 'vim':

@@ -1,6 +1,6 @@
 import { LoadingSpinner } from '@sourcegraph/react-loading-spinner'
 import React, { Suspense } from 'react'
-import { Redirect, Route, RouteComponentProps, Switch } from 'react-router'
+import { Redirect, Route, RouteComponentProps, Switch, matchPath } from 'react-router'
 import { Observable } from 'rxjs'
 import { ActivationProps } from '../../shared/src/components/activation/Activation'
 import { FetchFileCtx } from '../../shared/src/components/CodeExcerpt'
@@ -37,6 +37,7 @@ import {
     InteractiveSearchProps,
     CaseSensitivityProps,
     SmartSearchFieldProps,
+    CopyQueryButtonProps,
 } from './search'
 import { SiteAdminAreaRoute } from './site-admin/SiteAdminArea'
 import { SiteAdminSideBarGroups } from './site-admin/SiteAdminSidebar'
@@ -46,7 +47,6 @@ import { UserAreaHeaderNavItem } from './user/area/UserAreaHeader'
 import { UserSettingsAreaRoute } from './user/settings/UserSettingsArea'
 import { UserSettingsSidebarItems } from './user/settings/UserSettingsSidebar'
 import { parseBrowserRepoURL } from './util/url'
-import { LiteralSearchToast } from './marketing/LiteralSearchToast'
 import { SurveyToast } from './marketing/SurveyToast'
 import { ThemeProps } from '../../shared/src/theme'
 import { ThemePreferenceProps } from './theme'
@@ -54,6 +54,8 @@ import { KeyboardShortcutsProps, KEYBOARD_SHORTCUT_SHOW_HELP } from './keyboardS
 import { QueryState } from './search/helpers'
 import { RepoSettingsAreaRoute } from './repo/settings/RepoSettingsArea'
 import { RepoSettingsSideBarItem } from './repo/settings/RepoSettingsSidebar'
+import { VersionContextProps } from '../../shared/src/search/util'
+import { VersionContext } from './schema/site.schema'
 
 export interface LayoutProps
     extends RouteComponentProps<{}>,
@@ -68,7 +70,9 @@ export interface LayoutProps
         PatternTypeProps,
         CaseSensitivityProps,
         InteractiveSearchProps,
-        SmartSearchFieldProps {
+        SmartSearchFieldProps,
+        CopyQueryButtonProps,
+        VersionContextProps {
     exploreSections: readonly ExploreSectionDescriptor[]
     extensionAreaRoutes: readonly ExtensionAreaRoute[]
     extensionAreaHeaderNavItems: readonly ExtensionAreaHeaderNavItem[]
@@ -108,8 +112,12 @@ export interface LayoutProps
         query: QueryState['query'],
         version: string,
         patternType: GQL.SearchPatternType,
+        versionContext: string | undefined,
         { extensionsController }: ExtensionsControllerProps<'services'>
     ) => Observable<GQL.ISearchResults | ErrorLike>
+    setVersionContext: (versionContext: string | undefined) => void
+    availableVersionContexts: VersionContext[] | undefined
+    previousVersionContext: string | null
 
     isSourcegraphDotCom: boolean
     showCampaigns: boolean
@@ -117,11 +125,11 @@ export interface LayoutProps
 }
 
 export const Layout: React.FunctionComponent<LayoutProps> = props => {
-    const isSearchHomepage =
-        props.location.pathname === '/search' &&
-        !parseSearchURLQuery(props.location.search, props.interactiveSearchMode)
+    const routeMatch = props.routes.find(({ path, exact }) => matchPath(props.location.pathname, { path, exact }))?.path
+    const isSearchRelatedPage = (routeMatch === '/:repoRevAndRest+' || routeMatch?.startsWith('/search')) ?? false
+    const isSearchHomepage = props.location.pathname === '/search' && !parseSearchURLQuery(props.location.search)
 
-    const needsSiteInit = window.context.showOnboarding
+    const needsSiteInit = window.context.needsSiteInit
     const isSiteInit = props.location.pathname === '/site-admin/init'
 
     const hideGlobalSearchInput: GlobalNavbar['props']['hideGlobalSearchInput'] =
@@ -142,15 +150,16 @@ export const Layout: React.FunctionComponent<LayoutProps> = props => {
             <GlobalAlerts
                 isSiteAdmin={!!props.authenticatedUser && props.authenticatedUser.siteAdmin}
                 settingsCascade={props.settingsCascade}
+                history={props.history}
             />
             {!needsSiteInit && !isSiteInit && !!props.authenticatedUser && (
                 <IntegrationsToast history={props.history} />
             )}
             {!isSiteInit && <SurveyToast authenticatedUser={props.authenticatedUser} />}
-            {!isSiteInit && <LiteralSearchToast isSourcegraphDotCom={props.isSourcegraphDotCom} />}
             {!isSiteInit && (
                 <GlobalNavbar
                     {...props}
+                    isSearchRelatedPage={isSearchRelatedPage}
                     lowProfile={isSearchHomepage}
                     hideGlobalSearchInput={hideGlobalSearchInput}
                     hideNavLinks={false}
@@ -161,30 +170,21 @@ export const Layout: React.FunctionComponent<LayoutProps> = props => {
                 <Suspense fallback={<LoadingSpinner className="icon-inline m-2" />}>
                     <Switch>
                         {/* eslint-disable react/jsx-no-bind */}
-                        {props.routes.map(({ render, condition = () => true, ...route }) => {
-                            const isFullWidth = !route.forceNarrowWidth
-                            return (
+                        {props.routes.map(
+                            ({ render, condition = () => true, ...route }) =>
                                 condition(props) && (
                                     <Route
                                         {...route}
                                         key="hardcoded-key" // see https://github.com/ReactTraining/react-router/issues/4578#issuecomment-334489490
                                         component={undefined}
                                         render={routeComponentProps => (
-                                            <div
-                                                className={[
-                                                    'layout__app-router-container',
-                                                    `layout__app-router-container--${
-                                                        isFullWidth ? 'full-width' : 'restricted'
-                                                    }`,
-                                                ].join(' ')}
-                                            >
+                                            <div className="layout__app-router-container">
                                                 {render({ ...props, ...routeComponentProps })}
                                             </div>
                                         )}
                                     />
                                 )
-                            )
-                        })}
+                        )}
                         {/* eslint-enable react/jsx-no-bind */}
                     </Switch>
                 </Suspense>

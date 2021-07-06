@@ -8,14 +8,10 @@ import * as GQL from '../../../shared/src/graphql/schema'
 import { createAggregateError } from '../../../shared/src/util/errors'
 import { queryGraphQL } from '../backend/graphql'
 import { PageTitle } from '../components/PageTitle'
-import {
-    accessTokenFragment,
-    AccessTokenNode,
-    AccessTokenNodeProps,
-    FilteredAccessTokenConnection,
-} from '../settings/tokens/AccessTokenNode'
+import { accessTokenFragment, AccessTokenNode, AccessTokenNodeProps } from '../settings/tokens/AccessTokenNode'
 import { eventLogger } from '../tracking/eventLogger'
 import { LinkOrSpan } from '../../../shared/src/components/LinkOrSpan'
+import { FilteredConnection } from '../components/FilteredConnection'
 
 interface Props extends RouteComponentProps<{}> {
     authenticatedUser: GQL.IUser
@@ -36,16 +32,17 @@ export class SiteAdminTokensPage extends React.PureComponent<Props, State> {
     }
 
     public render(): JSX.Element | null {
-        const nodeProps: Pick<AccessTokenNodeProps, 'showSubject' | 'onDidUpdate'> = {
+        const nodeProps: Omit<AccessTokenNodeProps, 'node'> = {
             showSubject: true,
             onDidUpdate: this.onDidUpdateAccessToken,
+            history: this.props.history,
         }
 
         const accessTokensEnabled = window.context.accessTokensAllow !== 'none'
         return (
             <div className="user-settings-tokens-page">
                 <PageTitle title="Access tokens - Admin" />
-                <div className="d-flex justify-content-between align-items-center mt-3 mb-3">
+                <div className="d-flex justify-content-between align-items-center mb-3">
                     <h2 className="mb-0">Access tokens</h2>
                     <LinkOrSpan
                         title={accessTokensEnabled ? '' : 'Access token creation is disabled in site configuration'}
@@ -56,7 +53,7 @@ export class SiteAdminTokensPage extends React.PureComponent<Props, State> {
                     </LinkOrSpan>
                 </div>
                 <p>Tokens may be used to access the Sourcegraph API with the full privileges of the token's creator.</p>
-                <FilteredAccessTokenConnection
+                <FilteredConnection<GQL.IAccessToken, Omit<AccessTokenNodeProps, 'node'>>
                     className="list-group list-group-flush mt-3"
                     noun="access token"
                     pluralNoun="access tokens"

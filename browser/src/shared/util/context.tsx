@@ -1,6 +1,6 @@
 import { Observable, of } from 'rxjs'
 import { map } from 'rxjs/operators'
-import { observeStorageKey } from '../../browser/storage'
+import { observeStorageKey } from '../../browser-extension/web-extension-api/storage'
 
 export const DEFAULT_SOURCEGRAPH_URL = 'https://sourcegraph.com'
 
@@ -28,7 +28,7 @@ export function getAssetsURL(sourcegraphURL: string): string {
     return assetsURL.endsWith('/') ? assetsURL : assetsURL + '/'
 }
 
-type PlatformName = typeof globalThis.SOURCEGRAPH_INTEGRATION | 'firefox-extension' | 'chrome-extension'
+type PlatformName = NonNullable<typeof globalThis.SOURCEGRAPH_INTEGRATION> | 'firefox-extension' | 'chrome-extension'
 
 export function getPlatformName(): PlatformName {
     if (window.SOURCEGRAPH_PHABRICATOR_EXTENSION) {

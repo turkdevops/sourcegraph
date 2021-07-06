@@ -1,7 +1,5 @@
-/**
- * @jest-environment node
- */
-
+import expect from 'expect'
+import { describe, before, beforeEach, after, afterEach, test } from 'mocha'
 import { TestResourceManager } from './util/TestResourceManager'
 import { GraphQLClient, createGraphQLClient } from './util/GraphQLClient'
 import { Driver } from '../../../shared/src/e2e/driver'
@@ -16,6 +14,7 @@ import { setProperty } from '@sqs/jsonc-parser/lib/edit'
 import { applyEdits, parse } from '@sqs/jsonc-parser'
 import { overwriteSettings } from '../../../shared/src/settings/edit'
 import delay from 'delay'
+import { saveScreenshotsUponFailures } from '../../../shared/src/e2e/screenshotReporter'
 
 describe('Core functionality regression test suite', () => {
     const testUsername = 'test-core'
@@ -36,7 +35,7 @@ describe('Core functionality regression test suite', () => {
     let gqlClient: GraphQLClient
     let resourceManager: TestResourceManager
     let screenshots: ScreenshotVerifier
-    beforeAll(async () => {
+    before(async () => {
         ;({ driver, gqlClient, resourceManager } = await getTestTools(config))
         resourceManager.add(
             'User',
@@ -49,7 +48,10 @@ describe('Core functionality regression test suite', () => {
         )
         screenshots = new ScreenshotVerifier(driver)
     })
-    afterAll(async () => {
+
+    saveScreenshotsUponFailures(() => driver.page)
+
+    after(async () => {
         if (!config.noCleanup) {
             await resourceManager.destroyAll()
         }
@@ -71,9 +73,9 @@ describe('Core functionality regression test suite', () => {
 
     test('2.2.1 User settings are saved and applied', async () => {
         const getSettings = async () => {
-            await driver.page.waitForSelector('.view-line')
+            await driver.page.waitForSelector('.e2e-settings-file .monaco-editor')
             return driver.page.evaluate(() => {
-                const editor = document.querySelector('.monaco-editor') as HTMLElement
+                const editor = document.querySelector('.e2e-settings-file .monaco-editor') as HTMLElement
                 return editor ? editor.innerText : null
             })
         }
@@ -85,7 +87,7 @@ describe('Core functionality regression test suite', () => {
         }
         const newSettings = '{\xa0/*\xa0These\xa0are\xa0new\xa0settings\xa0*/}'
         await driver.replaceText({
-            selector: '.monaco-editor',
+            selector: '.e2e-settings-file .monaco-editor',
             newText: newSettings,
             selectMethod: 'keyboard',
             enterTextMethod: 'paste',
@@ -102,7 +104,7 @@ describe('Core functionality regression test suite', () => {
         }
 
         await driver.replaceText({
-            selector: '.monaco-editor',
+            selector: '.e2e-settings-file .monaco-editor',
             newText: newSettings,
             selectMethod: 'keyboard',
             enterTextMethod: 'type',
@@ -122,10 +124,13 @@ describe('Core functionality regression test suite', () => {
             )
         }
 
+        // When you type (or paste) "{" into the empty user settings editor it adds a "}". That's why
+        // we cannot type all the previous text, because then we would have two "}" at the end.
+        const textToTypeFromPrevious = previousSettings.replace(/\}$/, '')
         // Restore old settings
         await driver.replaceText({
-            selector: '.monaco-editor',
-            newText: previousSettings,
+            selector: '.e2e-settings-file .monaco-editor',
+            newText: textToTypeFromPrevious,
             selectMethod: 'keyboard',
             enterTextMethod: 'paste',
         })
@@ -246,10 +251,7 @@ describe('Core functionality regression test suite', () => {
         })
 
         await expect(
-            gqlClientWithInvalidToken
-                .queryGraphQL(currentUsernameQuery)
-                .pipe(map(dataOrThrowErrors))
-                .toPromise()
+            gqlClientWithInvalidToken.queryGraphQL(currentUsernameQuery).pipe(map(dataOrThrowErrors)).toPromise()
         ).rejects.toThrowError('401 Unauthorized')
     })
 
@@ -261,7 +263,8 @@ describe('Core functionality regression test suite', () => {
         }
 
         const { subjectID, settingsID, contents: oldContents } = await getGlobalSettings(gqlClient)
-        if (parse(oldContents).quicklinks) {
+        const parsedOldContents = parse(oldContents)
+        if (parsedOldContents?.quicklinks) {
             throw new Error('Global setting quicklinks already exists, aborting test')
         }
         const newContents = applyEdits(

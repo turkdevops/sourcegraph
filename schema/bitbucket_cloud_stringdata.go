@@ -14,7 +14,7 @@ const BitbucketCloudSchemaJSON = `{
   "required": ["url", "username", "appPassword"],
   "properties": {
     "url": {
-      "description": "URL of Bitbucket Cloud, such as https://bitbucket.org.",
+      "description": "URL of Bitbucket Cloud, such as https://bitbucket.org. Generally, admin should not modify the value of this option because Bitbucket Cloud is a public hosting platform.",
       "type": "string",
       "not": {
         "type": "string",
@@ -23,6 +23,40 @@ const BitbucketCloudSchemaJSON = `{
       "pattern": "^https?://",
       "format": "uri",
       "examples": ["https://bitbucket.org"]
+    },
+    "apiURL": {
+      "description": "The API URL of Bitbucket Cloud, such as https://api.bitbucket.org. Generally, admin should not modify the value of this option because Bitbucket Cloud is a public hosting platform.",
+      "type": "string",
+      "not": {
+        "type": "string",
+        "pattern": "example\\.com"
+      },
+      "pattern": "^https?://",
+      "format": "uri",
+      "examples": ["https://api.bitbucket.org"]
+    },
+    "rateLimit": {
+      "description": "Rate limit applied when making background API requests to Bitbucket Cloud.",
+      "title": "BitbucketCloudRateLimit",
+      "type": "object",
+      "required": ["enabled", "requestsPerHour"],
+      "properties": {
+        "enabled": {
+          "description": "true if rate limiting is enabled.",
+          "type": "boolean",
+          "default": true
+        },
+        "requestsPerHour": {
+          "description": "Requests per hour permitted. This is an average, calculated per second.",
+          "type": "number",
+          "default": 7200,
+          "minimum": 0
+        }
+      },
+      "default": {
+        "enabled": true,
+        "requestsPerHour": 7200
+      }
     },
     "username": {
       "description": "The username to use when authenticating to the Bitbucket Cloud. Also set the corresponding \"appPassword\" field.",
