@@ -3,16 +3,23 @@ package graphqlbackend
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/graph-gophers/graphql-go"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/db"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/types"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/search"
+	"github.com/sourcegraph/sourcegraph/internal/search/query"
+	querytypes "github.com/sourcegraph/sourcegraph/internal/search/query/types"
 	"github.com/sourcegraph/sourcegraph/internal/vcs/git"
+	"github.com/sourcegraph/sourcegraph/schema"
 )
 
 func TestSearch(t *testing.T) {
@@ -80,6 +87,10 @@ func TestSearch(t *testing.T) {
 			conf.Mock(&conf.Unified{})
 			defer conf.Mock(nil)
 			vars := map[string]interface{}{"query": tc.searchQuery, "version": tc.searchVersion}
+
+			mockDecodedViewerFinalSettings = &schema.Settings{}
+			defer func() { mockDecodedViewerFinalSettings = nil }()
+
 			db.Mocks.Repos.List = tc.reposListMock
 			sr := &schemaResolver{}
 			schema, err := graphql.ParseSchema(Schema, sr, graphql.Tracer(prometheusTracer{}))
@@ -243,12 +254,13 @@ func testStringResult(result *searchSuggestionResolver) string {
 	return name
 }
 
-func Test_defaultRepositories(t *testing.T) {
+func TestDefaultRepositories(t *testing.T) {
 	tcs := []struct {
 		name             string
 		defaultsInDb     []string
 		indexedRepoNames map[string]bool
 		want             []string
+		excludePatterns  []string
 	}{
 		{
 			name:             "none in db => none returned",
@@ -262,9 +274,31 @@ func Test_defaultRepositories(t *testing.T) {
 			indexedRepoNames: map[string]bool{"indexedrepo": true},
 			want:             []string{"indexedrepo"},
 		},
+		{
+			name:             "should not return excluded repo",
+			defaultsInDb:     []string{"unindexedrepo1", "indexedrepo1", "indexedrepo2", "indexedrepo3"},
+			indexedRepoNames: map[string]bool{"indexedrepo1": true, "indexedrepo2": true, "indexedrepo3": true},
+			excludePatterns:  []string{"indexedrepo3"},
+			want:             []string{"indexedrepo1", "indexedrepo2"},
+		},
+		{
+			name:             "should not return excluded repo (case insensitive)",
+			defaultsInDb:     []string{"unindexedrepo1", "indexedrepo1", "indexedrepo2", "Indexedrepo3"},
+			indexedRepoNames: map[string]bool{"indexedrepo1": true, "indexedrepo2": true, "Indexedrepo3": true},
+			excludePatterns:  []string{"indexedrepo3"},
+			want:             []string{"indexedrepo1", "indexedrepo2"},
+		},
+		{
+			name:             "should not return excluded repos ending in `test`",
+			defaultsInDb:     []string{"repo1", "repo2", "repo-test", "repoTEST"},
+			indexedRepoNames: map[string]bool{"repo1": true, "repo2": true, "repo-test": true, "repoTEST": true},
+			excludePatterns:  []string{"test$"},
+			want:             []string{"repo1", "repo2"},
+		},
 	}
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
+
 			var drs []*types.Repo
 			for i, name := range tc.defaultsInDb {
 				r := &types.Repo{
@@ -290,7 +324,7 @@ func Test_defaultRepositories(t *testing.T) {
 				return indexed, unindexed, nil
 			}
 			ctx := context.Background()
-			drs, err := defaultRepositories(ctx, getRawDefaultRepos, indexedRepos)
+			drs, err := defaultRepositories(ctx, getRawDefaultRepos, indexedRepos, tc.excludePatterns)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -305,7 +339,7 @@ func Test_defaultRepositories(t *testing.T) {
 	}
 }
 
-func Test_detectSearchType(t *testing.T) {
+func TestDetectSearchType(t *testing.T) {
 	typeRegexp := "regexp"
 	typeLiteral := "literal"
 	testCases := []struct {
@@ -313,20 +347,20 @@ func Test_detectSearchType(t *testing.T) {
 		version     string
 		patternType *string
 		input       string
-		want        SearchType
+		want        query.SearchType
 	}{
-		{"V1, no pattern type", "V1", nil, "", SearchTypeRegex},
-		{"V2, no pattern type", "V2", nil, "", SearchTypeLiteral},
-		{"V2, no pattern type, input does not produce parse error", "V2", nil, "/-/godoc", SearchTypeLiteral},
-		{"V1, regexp pattern type", "V1", &typeRegexp, "", SearchTypeRegex},
-		{"V2, regexp pattern type", "V2", &typeRegexp, "", SearchTypeRegex},
-		{"V1, literal pattern type", "V1", &typeLiteral, "", SearchTypeLiteral},
-		{"V2, override regexp pattern type", "V2", &typeLiteral, "patterntype:regexp", SearchTypeRegex},
-		{"V2, override regex variant pattern type", "V2", &typeLiteral, "patterntype:regex", SearchTypeRegex},
-		{"V2, override regex variant pattern type with double quotes", "V2", &typeLiteral, `patterntype:"regex"`, SearchTypeRegex},
-		{"V2, override regex variant pattern type with single quotes", "V2", &typeLiteral, `patterntype:'regex'`, SearchTypeRegex},
-		{"V1, override literal pattern type", "V1", &typeRegexp, "patterntype:literal", SearchTypeLiteral},
-		{"V1, override literal pattern type, with case-insensitive query", "V1", &typeRegexp, "pAtTErNTypE:literal", SearchTypeLiteral},
+		{"V1, no pattern type", "V1", nil, "", query.SearchTypeRegex},
+		{"V2, no pattern type", "V2", nil, "", query.SearchTypeLiteral},
+		{"V2, no pattern type, input does not produce parse error", "V2", nil, "/-/godoc", query.SearchTypeLiteral},
+		{"V1, regexp pattern type", "V1", &typeRegexp, "", query.SearchTypeRegex},
+		{"V2, regexp pattern type", "V2", &typeRegexp, "", query.SearchTypeRegex},
+		{"V1, literal pattern type", "V1", &typeLiteral, "", query.SearchTypeLiteral},
+		{"V2, override regexp pattern type", "V2", &typeLiteral, "patterntype:regexp", query.SearchTypeRegex},
+		{"V2, override regex variant pattern type", "V2", &typeLiteral, "patterntype:regex", query.SearchTypeRegex},
+		{"V2, override regex variant pattern type with double quotes", "V2", &typeLiteral, `patterntype:"regex"`, query.SearchTypeRegex},
+		{"V2, override regex variant pattern type with single quotes", "V2", &typeLiteral, `patterntype:'regex'`, query.SearchTypeRegex},
+		{"V1, override literal pattern type", "V1", &typeRegexp, "patterntype:literal", query.SearchTypeLiteral},
+		{"V1, override literal pattern type, with case-insensitive query", "V1", &typeRegexp, "pAtTErNTypE:literal", query.SearchTypeLiteral},
 	}
 
 	for _, test := range testCases {
@@ -337,6 +371,389 @@ func Test_detectSearchType(t *testing.T) {
 			}
 			if got != test.want {
 				t.Errorf("failed %v, got %v, expected %v", test.name, got, test.want)
+			}
+		})
+	}
+}
+
+func TestExactlyOneRepo(t *testing.T) {
+	cases := []struct {
+		repoFilters []string
+		want        bool
+	}{
+		{
+			repoFilters: []string{`^github\.com/sourcegraph/zoekt$`},
+			want:        true,
+		},
+		{
+			repoFilters: []string{`^github\.com/sourcegraph/zoekt$@ef3ec23`},
+			want:        true,
+		},
+		{
+			repoFilters: []string{`^github\.com/sourcegraph/zoekt$@ef3ec23:deadbeef`},
+			want:        true,
+		},
+		{
+			repoFilters: []string{`^.*$`},
+			want:        false,
+		},
+
+		{
+			repoFilters: []string{`^github\.com/sourcegraph/zoekt`},
+			want:        false,
+		},
+		{
+			repoFilters: []string{`^github\.com/sourcegraph/zoekt$`, `github\.com/sourcegraph/sourcegraph`},
+			want:        false,
+		},
+	}
+	for _, c := range cases {
+		t.Run("exactly one repo", func(t *testing.T) {
+			if got := exactlyOneRepo(c.repoFilters); got != c.want {
+				t.Errorf("got %t, want %t", got, c.want)
+			}
+		})
+	}
+}
+
+func TestQuoteSuggestions(t *testing.T) {
+	t.Run("regex error", func(t *testing.T) {
+		raw := "*"
+		_, err := query.Process(raw, query.SearchTypeRegex)
+		if err == nil {
+			t.Fatalf("error returned from query.Process(%q) is nil", raw)
+		}
+		alert := alertForQuery(raw, err)
+		if !strings.Contains(strings.ToLower(alert.title), "regexp") {
+			t.Errorf("title is '%s', want it to contain 'regexp'", alert.title)
+		}
+		if !strings.Contains(alert.description, "regular expression") {
+			t.Errorf("description is '%s', want it to contain 'regular expression'", alert.description)
+		}
+	})
+
+	t.Run("type error that is not a regex error should show a suggestion", func(t *testing.T) {
+		raw := "-foobar"
+		_, alert := query.Process(raw, query.SearchTypeRegex)
+		if alert == nil {
+			t.Fatalf("alert returned from query.Process(%q) is nil", raw)
+		}
+	})
+
+	t.Run("query parse error", func(t *testing.T) {
+		raw := ":"
+		_, err := query.Process(raw, query.SearchTypeRegex)
+		if err == nil {
+			t.Fatalf("error returned from query.Process(%q) is nil", raw)
+		}
+		alert := alertForQuery(raw, err)
+		if strings.Contains(strings.ToLower(alert.title), "regexp") {
+			t.Errorf("title is '%s', want it not to contain 'regexp'", alert.title)
+		}
+		if strings.Contains(alert.description, "regular expression") {
+			t.Errorf("description is '%s', want it not to contain 'regular expression'", alert.description)
+		}
+	})
+
+	t.Run("negated file field with an invalid regex", func(t *testing.T) {
+		raw := "-f:(a"
+		_, err := query.Process(raw, query.SearchTypeRegex)
+		if err == nil {
+			t.Fatal("query.Process failed to detect the invalid regex in the f: field")
+		}
+		alert := alertForQuery(raw, err)
+		if len(alert.proposedQueries) != 1 {
+			t.Fatalf("got %d proposed queries (%v), want exactly 1", len(alert.proposedQueries), alert.proposedQueries)
+		}
+	})
+}
+
+func TestEueryForStableResults(t *testing.T) {
+	cases := []struct {
+		query           string
+		wantStableCount int32
+		wantError       error
+	}{
+		{
+			query:           "foo stable:yes",
+			wantStableCount: 30,
+		},
+		{
+			query:           "foo stable:yes count:1000",
+			wantStableCount: 1000,
+		},
+		{
+			query:     "foo stable:yes count:5001",
+			wantError: fmt.Errorf("Stable searches are limited to at max count:%d results. Consider removing 'stable:', narrowing the search with 'repo:', or using the paginated search API.", maxSearchResultsPerPaginatedRequest),
+		},
+	}
+	for _, c := range cases {
+		t.Run("query for stable results", func(t *testing.T) {
+			queryInfo, _ := query.Process(c.query, query.SearchTypeLiteral)
+			args, queryInfo, err := queryForStableResults(&SearchArgs{}, queryInfo)
+			if err != nil {
+				if !reflect.DeepEqual(err, c.wantError) {
+					t.Errorf("Got error %v, want %v", err, c.wantError)
+				}
+				return
+			}
+			if diff := cmp.Diff(*args.First, c.wantStableCount); diff != "" {
+				t.Error(diff)
+			}
+			// Ensure type:file is set.
+			fileValue := "file"
+			wantTypeValue := querytypes.Value{String: &fileValue}
+			gotTypeValues := queryInfo.Fields()["type"]
+			if len(gotTypeValues) != 1 && *gotTypeValues[0] != wantTypeValue {
+				t.Errorf("Query %s sets stable:yes but is not transformed with type:file.", c.query)
+			}
+		})
+	}
+}
+
+func TestVersionContext(t *testing.T) {
+	conf.Mock(&conf.Unified{
+		SiteConfiguration: schema.SiteConfiguration{
+			ExperimentalFeatures: &schema.ExperimentalFeatures{
+				VersionContexts: []*schema.VersionContext{
+					{
+						Name: "ctx-1",
+						Revisions: []*schema.VersionContextRevision{
+							{Repo: "github.com/sourcegraph/foo", Rev: "some-branch"},
+							{Repo: "github.com/sourcegraph/foobar", Rev: "v1.0.0"},
+							{Repo: "github.com/sourcegraph/bar", Rev: "e62b6218f61cc1564d6ebcae19f9dafdf1357567"},
+						},
+					}, {
+						Name: "multiple-revs",
+						Revisions: []*schema.VersionContextRevision{
+							{Repo: "github.com/sourcegraph/foobar", Rev: "v1.0.0"},
+							{Repo: "github.com/sourcegraph/foobar", Rev: "v1.1.0"},
+							{Repo: "github.com/sourcegraph/bar", Rev: "e62b6218f61cc1564d6ebcae19f9dafdf1357567"},
+						},
+					},
+				},
+			},
+		},
+	})
+	defer conf.Mock(nil)
+
+	mockDecodedViewerFinalSettings = &schema.Settings{}
+	defer func() { mockDecodedViewerFinalSettings = nil }()
+
+	tcs := []struct {
+		name           string
+		searchQuery    string
+		versionContext string
+		// db.ReposListOptions.Names
+		wantReposListOptionsNames []string
+		reposGetListNames         []string
+		wantResults               []string
+	}{{
+		name:           "query with version context should return the right repositories",
+		searchQuery:    "foo",
+		versionContext: "ctx-1",
+		wantReposListOptionsNames: []string{
+			"github.com/sourcegraph/foo",
+			"github.com/sourcegraph/foobar",
+			"github.com/sourcegraph/bar",
+		},
+		reposGetListNames: []string{
+			"github.com/sourcegraph/foo",
+			"github.com/sourcegraph/foobar",
+			"github.com/sourcegraph/bar",
+		},
+		wantResults: []string{
+			"github.com/sourcegraph/foo@some-branch",
+			"github.com/sourcegraph/foobar@v1.0.0",
+			"github.com/sourcegraph/bar@e62b6218f61cc1564d6ebcae19f9dafdf1357567",
+		},
+	}, {
+		name:           "query with version context and subset of repos",
+		searchQuery:    "repo:github.com/sourcegraph/foo.*",
+		versionContext: "ctx-1",
+		wantReposListOptionsNames: []string{
+			"github.com/sourcegraph/foo",
+			"github.com/sourcegraph/foobar",
+			"github.com/sourcegraph/bar",
+		},
+		reposGetListNames: []string{
+			"github.com/sourcegraph/foo",
+			"github.com/sourcegraph/foobar",
+		},
+		wantResults: []string{
+			"github.com/sourcegraph/foo@some-branch",
+			"github.com/sourcegraph/foobar@v1.0.0",
+		},
+	}, {
+		name:           "query with version context and non-exact search",
+		searchQuery:    "repo:github.com/sourcegraph/notincontext",
+		versionContext: "ctx-1",
+		wantReposListOptionsNames: []string{
+			"github.com/sourcegraph/foo",
+			"github.com/sourcegraph/foobar",
+			"github.com/sourcegraph/bar",
+		},
+		reposGetListNames: []string{},
+		wantResults:       []string{},
+	}, {
+		name:                      "query with version context and exact repo search",
+		searchQuery:               "repo:github.com/sourcegraph/notincontext@v1.0.0",
+		versionContext:            "ctx-1",
+		wantReposListOptionsNames: []string{},
+		reposGetListNames:         []string{"github.com/sourcegraph/notincontext"},
+		wantResults:               []string{"github.com/sourcegraph/notincontext@v1.0.0"},
+	}, {
+		name:           "multiple revs",
+		searchQuery:    "foo",
+		versionContext: "multiple-revs",
+		wantReposListOptionsNames: []string{
+			"github.com/sourcegraph/foobar",
+			"github.com/sourcegraph/foobar", // we don't mind listing repos twice
+			"github.com/sourcegraph/bar",
+		},
+		reposGetListNames: []string{
+			"github.com/sourcegraph/foobar",
+			"github.com/sourcegraph/bar",
+		},
+		wantResults: []string{
+			"github.com/sourcegraph/foobar@v1.0.0:v1.1.0",
+			"github.com/sourcegraph/bar@e62b6218f61cc1564d6ebcae19f9dafdf1357567",
+		},
+	}}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			qinfo, err := query.ParseAndCheck(tc.searchQuery)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			resolver := searchResolver{
+				query:          qinfo,
+				versionContext: &tc.versionContext,
+			}
+
+			db.Mocks.Repos.List = func(ctx context.Context, opts db.ReposListOptions) ([]*types.Repo, error) {
+				if diff := cmp.Diff(tc.wantReposListOptionsNames, opts.Names, cmpopts.EquateEmpty()); diff != "" {
+					t.Fatalf("db.RepostListOptions.Names mismatch (-want, +got):\n%s", diff)
+				}
+				var repos []*types.Repo
+				for _, name := range tc.reposGetListNames {
+					repos = append(repos, &types.Repo{Name: api.RepoName(name)})
+				}
+				return repos, nil
+			}
+
+			gotResults, _, _, _, err := resolver.resolveRepositories(context.Background(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, reporev := range gotResults {
+				got = append(got, string(reporev.Repo.Name)+"@"+strings.Join(reporev.RevSpecs(), ":"))
+			}
+
+			if diff := cmp.Diff(tc.wantResults, got, cmpopts.EquateEmpty()); diff != "" {
+				t.Fatalf("mismatch (-want, +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestComputeExcludedRepositories(t *testing.T) {
+	cases := []struct {
+		Name              string
+		Query             string
+		Repos             []types.Repo
+		WantExcludedRepos *excludedRepos
+	}{
+		{
+			Name:  "filter out forks and archived repos",
+			Query: "repo:repo",
+			Repos: []types.Repo{
+				{
+					Name:       "repo-ordinary",
+					RepoFields: &types.RepoFields{},
+				},
+				{
+					Name:       "repo-forked",
+					RepoFields: &types.RepoFields{Fork: true},
+				},
+				{
+					Name:       "repo-forked-2",
+					RepoFields: &types.RepoFields{Fork: true},
+				},
+				{
+					Name:       "repo-archived",
+					RepoFields: &types.RepoFields{Archived: true},
+				},
+			},
+			WantExcludedRepos: &excludedRepos{forks: 2, archived: 1},
+		},
+		{
+			Name:  "exact repo match does not exclude fork",
+			Query: "repo:^repo-forked$",
+			Repos: []types.Repo{
+				{
+					Name:       "repo-forked",
+					RepoFields: &types.RepoFields{Fork: true},
+				},
+			},
+			WantExcludedRepos: &excludedRepos{forks: 0, archived: 0},
+		},
+		{
+			Name:  "when fork is set don't populate exclude",
+			Query: "repo:repo fork:no",
+			Repos: []types.Repo{
+				{
+					Name:       "repo",
+					RepoFields: &types.RepoFields{},
+				},
+				{
+					Name:       "repo-forked",
+					RepoFields: &types.RepoFields{Fork: true},
+				},
+			},
+			WantExcludedRepos: &excludedRepos{forks: 0, archived: 0},
+		},
+	}
+
+	for _, c := range cases {
+		// Setup: parse the query, extract its repo filters, and use
+		// those to populate the resolve repo options to pass to the
+		// function under test.
+		q, err := query.ParseAndCheck(c.Query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := searchResolver{query: q}
+		includePatterns, _ := r.query.RegexpPatterns(query.FieldRepo)
+		options := db.ReposListOptions{IncludePatterns: includePatterns}
+
+		// Setup: the mock DB lookup returns forked repo count if OnlyForks is set,
+		// and archived repo count if OnlyArchived is set.
+		db.Mocks.Repos.Count = func(_ context.Context, options db.ReposListOptions) (int, error) {
+			var count int
+			if options.OnlyForks {
+				for _, repo := range c.Repos {
+					if repo.Fork {
+						count += 1
+					}
+				}
+			}
+			if options.OnlyArchived {
+				for _, repo := range c.Repos {
+					if repo.Archived {
+						count += 1
+					}
+				}
+			}
+			return count, nil
+		}
+
+		t.Run("exclude repo", func(t *testing.T) {
+			got := computeExcludedRepositories(context.Background(), q, options)
+			if !reflect.DeepEqual(got, c.WantExcludedRepos) {
+				t.Fatalf("results = %+v, want %+v", got, c.WantExcludedRepos)
 			}
 		})
 	}

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	graphql "github.com/graph-gophers/graphql-go"
+	"github.com/graph-gophers/graphql-go"
 	"github.com/pkg/errors"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/backend"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/db"
@@ -63,15 +63,16 @@ func (*schemaResolver) UpdateExternalService(ctx context.Context, args *struct {
 		Config      *string
 	}
 }) (*externalServiceResolver, error) {
+	// 🚨 SECURITY: Only site admins are allowed to update the user.
+	if err := backend.CheckCurrentUserIsSiteAdmin(ctx); err != nil {
+		return nil, err
+	}
+
 	externalServiceID, err := unmarshalExternalServiceID(args.Input.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	// 🚨 SECURITY: Only site admins are allowed to update the user.
-	if err := backend.CheckCurrentUserIsSiteAdmin(ctx); err != nil {
-		return nil, err
-	}
 	if os.Getenv("EXTSVC_CONFIG_FILE") != "" && !extsvcConfigAllowEdits {
 		return nil, errors.New("updating external service not allowed when using EXTSVC_CONFIG_FILE")
 	}
@@ -149,6 +150,8 @@ func (*schemaResolver) DeleteExternalService(ctx context.Context, args *struct {
 	if err := db.ExternalServices.Delete(ctx, id); err != nil {
 		return nil, err
 	}
+	now := time.Now()
+	externalService.DeletedAt = &now
 
 	// The user doesn't care if triggering syncing failed when deleting a
 	// service, so kick off in the background.

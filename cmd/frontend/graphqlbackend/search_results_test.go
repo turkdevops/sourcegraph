@@ -2,32 +2,32 @@ package graphqlbackend
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/rand"
-	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/google/zoekt"
-	zoektrpc "github.com/google/zoekt/rpc"
-	"github.com/hashicorp/go-multierror"
-	"github.com/keegancsmith/sqlf"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/db"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/types"
 	"github.com/sourcegraph/sourcegraph/internal/api"
-	"github.com/sourcegraph/sourcegraph/internal/db/dbconn"
-	"github.com/sourcegraph/sourcegraph/internal/db/dbtesting"
-	"github.com/sourcegraph/sourcegraph/internal/endpoint"
-	"github.com/sourcegraph/sourcegraph/internal/gitserver"
 	"github.com/sourcegraph/sourcegraph/internal/search"
 	searchbackend "github.com/sourcegraph/sourcegraph/internal/search/backend"
 	"github.com/sourcegraph/sourcegraph/internal/search/query"
 	searchquerytypes "github.com/sourcegraph/sourcegraph/internal/search/query/types"
+	"github.com/sourcegraph/sourcegraph/schema"
 )
+
+var mockCount = func(_ context.Context, options db.ReposListOptions) (int, error) { return 0, nil }
+
+func assertEqual(t *testing.T, got, want interface{}) {
+	if diff := cmp.Diff(got, want); diff != "" {
+		t.Fatalf("(-want +got):\n%s", diff)
+	}
+}
 
 func TestSearchResults(t *testing.T) {
 	limitOffset := &db.LimitOffset{Limit: maxReposToSearch() + 1}
@@ -66,23 +66,25 @@ func TestSearchResults(t *testing.T) {
 	searchVersions := []string{"V1", "V2"}
 
 	t.Run("repo: only", func(t *testing.T) {
+		mockDecodedViewerFinalSettings = &schema.Settings{}
+		defer func() { mockDecodedViewerFinalSettings = nil }()
+
 		var calledReposList bool
 		db.Mocks.Repos.List = func(_ context.Context, op db.ReposListOptions) ([]*types.Repo, error) {
 			calledReposList = true
 
-			want := db.ReposListOptions{
-				OnlyRepoIDs:     true,
-				IncludePatterns: []string{"r", "p"},
-				LimitOffset:     limitOffset,
-			}
-			if !reflect.DeepEqual(op, want) {
-				t.Fatalf("got %+v, want %+v", op, want)
-			}
+			// Validate that the following options are invariant
+			// when calling the DB through Repos.List, no matter how
+			// many times it is called for a single Search(...) operation.
+			assertEqual(t, op.OnlyRepoIDs, true)
+			assertEqual(t, op.LimitOffset, limitOffset)
+			assertEqual(t, op.IncludePatterns, []string{"r", "p"})
 
 			return []*types.Repo{{ID: 1, Name: "repo"}}, nil
 		}
 		db.Mocks.Repos.MockGetByName(t, "repo", 1)
 		db.Mocks.Repos.MockGet(t, 1)
+		db.Mocks.Repos.Count = mockCount
 
 		mockSearchFilesInRepos = func(args *search.TextParameters) ([]*FileMatchResolver, *searchResultsCommon, error) {
 			return nil, &searchResultsCommon{repos: []*types.Repo{{ID: 1, Name: "repo"}}}, nil
@@ -99,24 +101,25 @@ func TestSearchResults(t *testing.T) {
 	})
 
 	t.Run("multiple terms regexp", func(t *testing.T) {
+		mockDecodedViewerFinalSettings = &schema.Settings{}
+		defer func() { mockDecodedViewerFinalSettings = nil }()
+
 		var calledReposList bool
 		db.Mocks.Repos.List = func(_ context.Context, op db.ReposListOptions) ([]*types.Repo, error) {
 			calledReposList = true
 
-			want := db.ReposListOptions{
-				OnlyRepoIDs: true,
-				LimitOffset: limitOffset,
-			}
-
-			if !reflect.DeepEqual(op, want) {
-				t.Fatalf("got %+v, want %+v", op, want)
-			}
+			// Validate that the following options are invariant
+			// when calling the DB through Repos.List, no matter how
+			// many times it is called for a single Search(...) operation.
+			assertEqual(t, op.OnlyRepoIDs, true)
+			assertEqual(t, op.LimitOffset, limitOffset)
 
 			return []*types.Repo{{ID: 1, Name: "repo"}}, nil
 		}
 		defer func() { db.Mocks = db.MockStores{} }()
 		db.Mocks.Repos.MockGetByName(t, "repo", 1)
 		db.Mocks.Repos.MockGet(t, 1)
+		db.Mocks.Repos.Count = mockCount
 
 		calledSearchRepositories := false
 		mockSearchRepositories = func(args *search.TextParameters) ([]SearchResultResolver, *searchResultsCommon, error) {
@@ -170,24 +173,25 @@ func TestSearchResults(t *testing.T) {
 	})
 
 	t.Run("multiple terms literal", func(t *testing.T) {
+		mockDecodedViewerFinalSettings = &schema.Settings{}
+		defer func() { mockDecodedViewerFinalSettings = nil }()
+
 		var calledReposList bool
 		db.Mocks.Repos.List = func(_ context.Context, op db.ReposListOptions) ([]*types.Repo, error) {
 			calledReposList = true
 
-			want := db.ReposListOptions{
-				OnlyRepoIDs: true,
-				LimitOffset: limitOffset,
-			}
-
-			if !reflect.DeepEqual(op, want) {
-				t.Fatalf("got %+v, want %+v", op, want)
-			}
+			// Validate that the following options are invariant
+			// when calling the DB through Repos.List, no matter how
+			// many times it is called for a single Search(...) operation.
+			assertEqual(t, op.OnlyRepoIDs, true)
+			assertEqual(t, op.LimitOffset, limitOffset)
 
 			return []*types.Repo{{ID: 1, Name: "repo"}}, nil
 		}
 		defer func() { db.Mocks = db.MockStores{} }()
 		db.Mocks.Repos.MockGetByName(t, "repo", 1)
 		db.Mocks.Repos.MockGet(t, 1)
+		db.Mocks.Repos.Count = mockCount
 
 		calledSearchRepositories := false
 		mockSearchRepositories = func(args *search.TextParameters) ([]SearchResultResolver, *searchResultsCommon, error) {
@@ -238,206 +242,95 @@ func TestSearchResults(t *testing.T) {
 			t.Error("calledSearchSymbols")
 		}
 	})
-}
 
-func BenchmarkSearchResults(b *testing.B) {
-	minimalRepos, _, zoektRepos := generateRepos(5000)
-	zoektFileMatches := generateZoektMatches(50)
+	t.Run("test start time is not null when alert thrown", func(t *testing.T) {
+		for _, v := range searchVersions {
+			r, err := (&schemaResolver{}).Search(&SearchArgs{Query: `repo:*`, Version: v})
+			if err != nil {
+				t.Fatal("Search:", err)
+			}
 
-	z := &searchbackend.Zoekt{
-		Client: &fakeSearcher{
-			repos:  &zoekt.RepoList{Repos: zoektRepos},
-			result: &zoekt.SearchResult{Files: zoektFileMatches},
-		},
-		DisableCache: true,
-	}
+			results, err := r.Results(context.Background())
+			if err != nil {
+				t.Fatal("Search: ", err)
+			}
 
-	ctx := context.Background()
-	db.Mocks.Repos.List = func(_ context.Context, op db.ReposListOptions) ([]*types.Repo, error) {
-		return minimalRepos, nil
-	}
-	defer func() { db.Mocks = db.MockStores{} }()
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for n := 0; n < b.N; n++ {
-		q, err := query.ParseAndCheck(`print index:only count:350`)
-		if err != nil {
-			b.Fatal(err)
+			if results.start.IsZero() {
+				t.Error("Start value is not set")
+			}
 		}
-		resolver := &searchResolver{query: q, zoekt: z}
-		results, err := resolver.Results(ctx)
-		if err != nil {
-			b.Fatal("Results:", err)
-		}
-		if int(results.MatchCount()) != len(zoektFileMatches) {
-			b.Fatalf("wrong results length. want=%d, have=%d\n", len(zoektFileMatches), results.MatchCount())
-		}
-	}
-}
-
-func BenchmarkIntegrationSearchResults(b *testing.B) {
-	dbtesting.SetupGlobalTestDB(b)
-
-	ctx := context.Background()
-
-	_, repos, zoektRepos := generateRepos(5000)
-	zoektFileMatches := generateZoektMatches(50)
-
-	zoektClient, cleanup := zoektRPC(&fakeSearcher{
-		repos:  &zoekt.RepoList{Repos: zoektRepos},
-		result: &zoekt.SearchResult{Files: zoektFileMatches},
 	})
-	defer cleanup()
-	z := &searchbackend.Zoekt{
-		Client:       zoektClient,
-		DisableCache: true,
-	}
-
-	rows := make([]*sqlf.Query, 0, len(repos))
-	for _, r := range repos {
-		rows = append(rows, sqlf.Sprintf(
-			"(%s, %s, %s, %s, %s, %s, %s)",
-			r.Name,
-			r.Description,
-			r.Fork,
-			true,
-			r.ExternalRepo.ServiceType,
-			r.ExternalRepo.ServiceID,
-			r.ExternalRepo.ID,
-		))
-	}
-
-	q := sqlf.Sprintf(`
-		INSERT INTO repo (
-			name,
-			description,
-			fork,
-			enabled,
-			external_service_type,
-			external_service_id,
-			external_id
-		)
-		VALUES %s`,
-		sqlf.Join(rows, ","),
-	)
-
-	_, err := dbconn.Global.ExecContext(ctx, q.Query(sqlf.PostgresBindVar), q.Args()...)
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for n := 0; n < b.N; n++ {
-		q, err := query.ParseAndCheck(`print index:only count:350`)
-		if err != nil {
-			b.Fatal(err)
-		}
-		resolver := &searchResolver{query: q, zoekt: z}
-		results, err := resolver.Results(ctx)
-		if err != nil {
-			b.Fatal("Results:", err)
-		}
-		if int(results.MatchCount()) != len(zoektFileMatches) {
-			b.Fatalf("wrong results length. want=%d, have=%d\n", len(zoektFileMatches), results.MatchCount())
-		}
-	}
 }
 
-func generateRepos(count int) ([]*types.Repo, []*types.Repo, []*zoekt.RepoListEntry) {
-	var reposWithIDs []*types.Repo
-	var repos []*types.Repo
-	var zoektRepos []*zoekt.RepoListEntry
-
-	for i := 1; i <= count; i++ {
-		name := fmt.Sprintf("repo-%d", i)
-
-		repoWithIDs := &types.Repo{
-			ID:   api.RepoID(i),
-			Name: api.RepoName(name),
-			ExternalRepo: api.ExternalRepoSpec{
-				ID:          name,
-				ServiceType: "github",
-				ServiceID:   "https://github.com",
-			}}
-
-		reposWithIDs = append(reposWithIDs, repoWithIDs)
-
-		repos = append(repos, &types.Repo{
-
-			ID:           repoWithIDs.ID,
-			Name:         repoWithIDs.Name,
-			ExternalRepo: repoWithIDs.ExternalRepo,
-
-			RepoFields: &types.RepoFields{
-				URI:         fmt.Sprintf("https://github.com/foobar/%s", repoWithIDs.Name),
-				Description: "this repositoriy contains a side project that I haven't maintained in 2 years",
-				Language:    "v-language",
-			}})
-
-		zoektRepos = append(zoektRepos, &zoekt.RepoListEntry{
-			Repository: zoekt.Repository{
-				Name:     name,
-				Branches: []zoekt.RepositoryBranch{{Name: "HEAD", Version: "deadbeef"}},
-			},
-		})
-	}
-	return reposWithIDs, repos, zoektRepos
-}
-
-func generateZoektMatches(count int) []zoekt.FileMatch {
-	var zoektFileMatches []zoekt.FileMatch
-	for i := 1; i <= count; i++ {
-		repoName := fmt.Sprintf("repo-%d", i)
-		fileName := fmt.Sprintf("foobar-%d.go", i)
-
-		zoektFileMatches = append(zoektFileMatches, zoekt.FileMatch{
-			Score:      5.0,
-			FileName:   fileName,
-			Repository: repoName, // Important: this needs to match a name in `repos`
-			Branches:   []string{"master"},
-			LineMatches: []zoekt.LineMatch{
-				{
-					Line: nil,
-				},
-			},
-			Checksum: []byte{0, 1, 2},
-		})
-	}
-	return zoektFileMatches
-}
-
-// zoektRPC starts zoekts rpc interface and returns a client to
-// searcher. Useful for capturing CPU/memory usage when benchmarking the zoekt
-// client.
-func zoektRPC(s zoekt.Searcher) (zoekt.Searcher, func()) {
-	mux := http.NewServeMux()
-	mux.Handle(zoektrpc.DefaultRPCPath, zoektrpc.Server(s))
-	ts := httptest.NewServer(mux)
-	cl := zoektrpc.Client(strings.TrimPrefix(ts.URL, "http://"))
-	return cl, func() {
-		cl.Close()
-		ts.Close()
-	}
-}
-
-func TestRegexpPatternMatchingExprsInOrder(t *testing.T) {
-	got := regexpPatternMatchingExprsInOrder([]string{})
+func TestOrderedFuzzyRegexp(t *testing.T) {
+	got := orderedFuzzyRegexp([]string{})
 	if want := ""; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 
-	got = regexpPatternMatchingExprsInOrder([]string{"a"})
+	got = orderedFuzzyRegexp([]string{"a"})
 	if want := "a"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 
-	got = regexpPatternMatchingExprsInOrder([]string{"a", "b|c"})
+	got = orderedFuzzyRegexp([]string{"a", "b|c"})
 	if want := "(a).*?(b|c)"; got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestProcessSearchPattern(t *testing.T) {
+	cases := []struct {
+		Name    string
+		Pattern string
+		Opts    *getPatternInfoOptions
+		Want    string
+	}{
+		{
+			Name:    "Regexp, no content field",
+			Pattern: `search me`,
+			Opts:    &getPatternInfoOptions{},
+			Want:    "(search).*?(me)",
+		},
+		{
+			Name:    "Regexp with content field",
+			Pattern: `content:search`,
+			Opts:    &getPatternInfoOptions{},
+			Want:    "search",
+		},
+		{
+			Name:    "Regexp with quoted content field",
+			Pattern: `content:"search me"`,
+			Opts:    &getPatternInfoOptions{},
+			Want:    "search me",
+		},
+		{
+			Name:    "Regexp with content field ignores default pattern",
+			Pattern: `content:"search me" ignored`,
+			Opts:    &getPatternInfoOptions{},
+			Want:    "search me",
+		},
+		{
+			Name:    "Literal with quoted content field means double quotes are not part of the pattern",
+			Pattern: `content:"content:"`,
+			Opts:    &getPatternInfoOptions{performLiteralSearch: true},
+			Want:    "content:",
+		},
+		{
+			Name:    "Literal with quoted content field containing quotes",
+			Pattern: `content:"\"content:\""`,
+			Opts:    &getPatternInfoOptions{performLiteralSearch: true},
+			Want:    "\"content:\"",
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.Name, func(t *testing.T) {
+			q, _ := query.ParseAndCheck(tt.Pattern)
+			got, _, _ := processSearchPattern(q, tt.Opts)
+			if got != tt.Want {
+				t.Fatalf("got %s\nwant %s", got, tt.Want)
+			}
+		})
 	}
 }
 
@@ -563,7 +456,12 @@ func TestSearchResolver_DynamicFilters(t *testing.T) {
 		Repo:  repo,
 	}
 
-	rev := "develop"
+	ignoreListFileMatch := &FileMatchResolver{
+		JPath: "/.gitignore",
+		Repo:  repo,
+	}
+
+	rev := "develop3.0"
 	fileMatchRev := &FileMatchResolver{
 		JPath:    "/testFile.md",
 		Repo:     repo,
@@ -599,8 +497,8 @@ func TestSearchResolver_DynamicFilters(t *testing.T) {
 			descr:         "single file match with specified revision",
 			searchResults: []SearchResultResolver{fileMatchRev},
 			expectedDynamicFilterStrs: map[string]struct{}{
-				`repo:^testRepo$@develop`: {},
-				`lang:markdown`:           {},
+				`repo:^testRepo$@develop3.0`: {},
+				`lang:markdown`:              {},
 			},
 		},
 		{
@@ -626,6 +524,14 @@ func TestSearchResolver_DynamicFilters(t *testing.T) {
 			searchResults:             []SearchResultResolver{},
 			expectedDynamicFilterStrs: map[string]struct{}{},
 		},
+		{
+			descr:         "values containing spaces are quoted",
+			searchResults: []SearchResultResolver{ignoreListFileMatch},
+			expectedDynamicFilterStrs: map[string]struct{}{
+				`repo:^testRepo$`:    {},
+				`lang:"ignore list"`: {},
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -637,8 +543,8 @@ func TestSearchResolver_DynamicFilters(t *testing.T) {
 				actualDynamicFilterStrs[filter.Value()] = struct{}{}
 			}
 
-			if !reflect.DeepEqual(actualDynamicFilterStrs, test.expectedDynamicFilterStrs) {
-				t.Errorf("actual: %v, expected: %v", actualDynamicFilterStrs, test.expectedDynamicFilterStrs)
+			if diff := cmp.Diff(test.expectedDynamicFilterStrs, actualDynamicFilterStrs); diff != "" {
+				t.Errorf("mismatch (-want, +got):\n%s", diff)
 			}
 		})
 	}
@@ -814,7 +720,7 @@ func TestCompareSearchResults(t *testing.T) {
 	}
 }
 
-func Test_longer(t *testing.T) {
+func TestLonger(t *testing.T) {
 	N := 2
 	noise := time.Nanosecond
 	for dt := time.Millisecond + noise; dt < time.Hour; dt += time.Millisecond {
@@ -832,7 +738,7 @@ func Test_longer(t *testing.T) {
 	}
 }
 
-func Test_roundStr(t *testing.T) {
+func TestRoundStr(t *testing.T) {
 	tests := []struct {
 		name string
 		s    string
@@ -926,6 +832,9 @@ func TestSearchResultsHydration(t *testing.T) {
 			Fork:        false,
 		}}
 
+	mockDecodedViewerFinalSettings = &schema.Settings{}
+	defer func() { mockDecodedViewerFinalSettings = nil }()
+
 	db.Mocks.Repos.Get = func(ctx context.Context, id api.RepoID) (*types.Repo, error) {
 		return hydratedRepo, nil
 	}
@@ -933,6 +842,7 @@ func TestSearchResultsHydration(t *testing.T) {
 	db.Mocks.Repos.List = func(_ context.Context, op db.ReposListOptions) ([]*types.Repo, error) {
 		return []*types.Repo{repoWithIDs}, nil
 	}
+	db.Mocks.Repos.Count = mockCount
 
 	defer func() { db.Mocks = db.MockStores{} }()
 
@@ -992,82 +902,7 @@ func TestSearchResultsHydration(t *testing.T) {
 	}
 }
 
-// Tests that indexed repos are filtered in structural search
-func TestStructuralSearchRepoFilter(t *testing.T) {
-	repoName := "indexed/one"
-	indexedFileName := "indexed.go"
-
-	indexedRepo := &types.Repo{Name: api.RepoName(repoName)}
-
-	unindexedRepo := &types.Repo{Name: api.RepoName("unindexed/one")}
-
-	db.Mocks.Repos.List = func(_ context.Context, op db.ReposListOptions) ([]*types.Repo, error) {
-		return []*types.Repo{indexedRepo, unindexedRepo}, nil
-	}
-	defer func() { db.Mocks = db.MockStores{} }()
-
-	mockSearchFilesInRepo = func(ctx context.Context, repo *types.Repo, gitserverRepo gitserver.Repo, rev string, info *search.TextPatternInfo, fetchTimeout time.Duration) (matches []*FileMatchResolver, limitHit bool, err error) {
-		repoName := repo.Name
-		switch repoName {
-		case "indexed/one":
-			return []*FileMatchResolver{{JPath: indexedFileName}}, false, nil
-		case "unindexed/one":
-			return []*FileMatchResolver{{JPath: "unindexed.go"}}, false, nil
-		default:
-			return nil, false, errors.New("Unexpected repo")
-		}
-	}
-	defer func() { mockSearchFilesInRepo = nil }()
-
-	zoektRepo := &zoekt.RepoListEntry{
-		Repository: zoekt.Repository{
-			Name:     string(indexedRepo.Name),
-			Branches: []zoekt.RepositoryBranch{{Name: "HEAD", Version: "deadbeef"}},
-		},
-	}
-
-	zoektFileMatches := []zoekt.FileMatch{{
-		FileName:   indexedFileName,
-		Repository: string(indexedRepo.Name),
-		LineMatches: []zoekt.LineMatch{
-			{
-				Line: nil,
-			},
-		},
-	}}
-
-	z := &searchbackend.Zoekt{
-		Client: &fakeSearcher{
-			repos:  &zoekt.RepoList{Repos: []*zoekt.RepoListEntry{zoektRepo}},
-			result: &zoekt.SearchResult{Files: zoektFileMatches},
-		},
-		DisableCache: true,
-	}
-
-	ctx := context.Background()
-
-	q, err := query.ParseAndCheck(`patterntype:structural index:only foo`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolver := &searchResolver{
-		query:        q,
-		patternType:  SearchTypeStructural,
-		zoekt:        z,
-		searcherURLs: endpoint.Static("test"),
-	}
-	results, err := resolver.Results(ctx)
-	if err != nil {
-		t.Fatal("Results:", err)
-	}
-
-	fm, _ := results.Results()[0].ToFileMatch()
-	if fm.JPath != indexedFileName {
-		t.Fatalf("wrong indexed filename. want=%s, have=%s\n", indexedFileName, fm.JPath)
-	}
-}
-
-func Test_dedupSort(t *testing.T) {
+func TestDedupSort(t *testing.T) {
 	repos := make(types.Repos, 512)
 	for i := range repos {
 		repos[i] = &types.Repo{ID: api.RepoID(i % 256)}
@@ -1090,7 +925,7 @@ func Test_dedupSort(t *testing.T) {
 	}
 }
 
-func Test_commitAndDiffSearchLimits(t *testing.T) {
+func TestCommitAndDiffSearchLimits(t *testing.T) {
 	cases := []struct {
 		name                 string
 		resultTypes          []string
@@ -1162,11 +997,7 @@ func Test_commitAndDiffSearchLimits(t *testing.T) {
 
 		haveResultTypes, alert := alertOnSearchLimit(test.resultTypes, &search.TextParameters{
 			Repos: repoRevs,
-			Query: &query.Query{
-				Query: &searchquerytypes.Query{
-					Fields: test.fields,
-				},
-			},
+			Query: &query.OrdinaryQuery{Query: &query.Query{Fields: test.fields}},
 		})
 
 		haveAlertDescription := ""
@@ -1188,64 +1019,6 @@ func Test_commitAndDiffSearchLimits(t *testing.T) {
 			}
 			t.Fatalf("test %s, have result type: %q, want result type: %q", test.name, haveResultType, wantResultType)
 		}
-	}
-}
-
-func Test_ErrorToAlertConversion(t *testing.T) {
-	cases := []struct {
-		name           string
-		errors         []error
-		wantErrors     []error
-		wantAlertTitle string
-	}{
-		{
-			name:           "multierr_is_unaffected",
-			errors:         []error{errors.New("some error")},
-			wantErrors:     []error{errors.New("some error")},
-			wantAlertTitle: "",
-		},
-		{
-			name: "multierr_converts_zip_error",
-			errors: []error{
-				errors.New("some error"),
-				errors.New("Assert_failure zip"),
-				errors.New("some other error"),
-			},
-			wantErrors: []error{
-				errors.New("some error"),
-				errors.New("some other error"),
-			},
-			wantAlertTitle: "Repository too large for structural search",
-		},
-		{
-			name: "surface_friendly_alert_on_oom_err_message",
-			errors: []error{
-				errors.New("some error"),
-				errors.New("Worker_oomed"),
-				errors.New("some other error"),
-			},
-			wantErrors: []error{
-				errors.New("some error"),
-				errors.New("some other error"),
-			},
-			wantAlertTitle: "Structural search needs more memory",
-		},
-	}
-	for _, test := range cases {
-		multiErr := &multierror.Error{
-			Errors:      test.errors,
-			ErrorFormat: multierror.ListFormatFunc,
-		}
-		haveMultiErr, haveAlert := alertOnError(multiErr)
-
-		if !reflect.DeepEqual(haveMultiErr.Errors, test.wantErrors) {
-			t.Fatalf("test %s, have errors: %q, want: %q", test.name, haveMultiErr.Errors, test.wantErrors)
-		}
-
-		if haveAlert != nil && haveAlert.title != test.wantAlertTitle {
-			t.Fatalf("test %s, have alert: %q, want: %q", test.name, haveAlert.title, test.wantAlertTitle)
-		}
-
 	}
 }
 
@@ -1332,4 +1105,24 @@ func Test_SearchResultsResolver_ApproximateResultCount(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSearchResolver_evaluateWarning(t *testing.T) {
+	q, _ := query.ProcessAndOr("file:foo or file:bar")
+	wantPrefix := "I'm having trouble understanding that query."
+	andOrQuery, _ := q.(*query.AndOrQuery)
+	got, _ := (&searchResolver{}).evaluate(context.Background(), andOrQuery.Query)
+	t.Run("warn for unsupported and/or query", func(t *testing.T) {
+		if !strings.HasPrefix(got.alert.description, wantPrefix) {
+			t.Fatalf("got alert description %s, want %s", got.alert.description, wantPrefix)
+		}
+	})
+
+	_, err := query.ProcessAndOr("file:foo or or or")
+	gotAlert := alertForQuery("", err)
+	t.Run("warn for unsupported ambiguous and/or query", func(t *testing.T) {
+		if !strings.HasPrefix(gotAlert.description, wantPrefix) {
+			t.Fatalf("got alert description %s, want %s", got.alert.description, wantPrefix)
+		}
+	})
 }

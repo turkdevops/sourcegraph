@@ -1,5 +1,4 @@
 {
-  "tslint.nodePath": "./node_modules",
   "search.exclude": {
     "**/node_modules": true,
     "**/bower_components": true,
@@ -10,10 +9,14 @@
     "**/out": true,
     "**/__fixtures__/**": true,
     "**/.cache": true,
+    "**/.nyc_output": true,
+    "doc/_resources/assets": true,
+    "**/.eslintcache": true,
   },
   "files.associations": {
     "**/dev/critical-config.json": "jsonc",
     "**/dev/site-config.json": "jsonc",
+    "**/.mocharc.json": "jsonc",
   },
   "json.schemas": [
     {
@@ -62,10 +65,7 @@
       "directory": "shared",
       "changeProcessCWD": true,
     },
-    {
-      "directory": "lsif",
-      "changeProcessCWD": true,
-    },
   ],
   "go.lintTool": "golangci-lint",
+  "shellformat.flag": "-i 2 -ci",
 }

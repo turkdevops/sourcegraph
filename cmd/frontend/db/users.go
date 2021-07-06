@@ -9,17 +9,17 @@ import (
 	"unicode/utf8"
 
 	multierror "github.com/hashicorp/go-multierror"
+	"github.com/inconshreveable/log15"
 	"github.com/keegancsmith/sqlf"
 	"github.com/lib/pq"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/authz"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/types"
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	"github.com/sourcegraph/sourcegraph/internal/db/dbconn"
+	"github.com/sourcegraph/sourcegraph/internal/db/dbutil"
 	"github.com/sourcegraph/sourcegraph/internal/db/globalstatedb"
 	"github.com/sourcegraph/sourcegraph/internal/errcode"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
-	log15 "gopkg.in/inconshreveable/log15.v2"
 )
 
 // users provides access to the `users` table.
@@ -103,6 +103,10 @@ type NewUser struct {
 	// user if at least one of the following is true: (1) the site has already been initialized or
 	// (2) any other user account already exists.
 	FailIfNotInitialUser bool `json:"-"` // forbid this field being set by JSON, just in case
+
+	// EnforcePasswordLength is whether should enforce minimum and maximum password length requirement.
+	// Users created by non-builtin auth providers do not have a password thus no need to check.
+	EnforcePasswordLength bool `json:"-"` // forbid this field being set by JSON, just in case
 }
 
 // Create creates a new user in the database.
@@ -123,6 +127,10 @@ type NewUser struct {
 // order to avoid a race condition where multiple initial site admins could be created or zero site
 // admins could be created.
 func (u *users) Create(ctx context.Context, info NewUser) (newUser *types.User, err error) {
+	if Mocks.Users.Create != nil {
+		return Mocks.Users.Create(ctx, info)
+	}
+
 	tx, err := dbconn.Global.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -147,8 +155,11 @@ const maxPasswordRunes = 256
 
 // checkPasswordLength returns an error if the password is too long.
 func checkPasswordLength(pw string) error {
-	if utf8.RuneCountInString(pw) > maxPasswordRunes {
-		return errcode.NewPresentationError(fmt.Sprintf("Passwords may not be more than %d characters.", maxPasswordRunes))
+	pwLen := utf8.RuneCountInString(pw)
+	minPasswordRunes := conf.AuthMinPasswordLength()
+	if pwLen < minPasswordRunes ||
+		pwLen > maxPasswordRunes {
+		return errcode.NewPresentationError(fmt.Sprintf("Passwords may not be less than %d or be more than %d characters.", minPasswordRunes, maxPasswordRunes))
 	}
 	return nil
 }
@@ -160,8 +171,10 @@ func (u *users) create(ctx context.Context, tx *sql.Tx, info NewUser) (newUser *
 		return Mocks.Users.Create(ctx, info)
 	}
 
-	if err := checkPasswordLength(info.Password); err != nil {
-		return nil, err
+	if info.EnforcePasswordLength {
+		if err := checkPasswordLength(info.Password); err != nil {
+			return nil, err
+		}
 	}
 
 	if info.Email != "" && info.EmailVerificationCode == "" && !info.EmailIsVerified {
@@ -271,20 +284,6 @@ func (u *users) create(ctx context.Context, tx *sql.Tx, info NewUser) (newUser *
 		}
 	}
 
-	var verifiedEmail string
-	if info.Email != "" && info.EmailIsVerified {
-		verifiedEmail = info.Email
-	}
-	if err = Authz.GrantPendingPermissions(ctx, &GrantPendingPermissionsArgs{
-		UserID:        id,
-		Username:      info.Username,
-		VerifiedEmail: verifiedEmail,
-		Perm:          authz.Read,
-		Type:          authz.PermRepos,
-	}); err != nil {
-		return nil, err
-	}
-
 	return &types.User{
 		ID:          id,
 		Username:    info.Username,
@@ -293,6 +292,7 @@ func (u *users) create(ctx context.Context, tx *sql.Tx, info NewUser) (newUser *
 		CreatedAt:   createdAt,
 		UpdatedAt:   updatedAt,
 		SiteAdmin:   siteAdmin,
+		BuiltinAuth: info.Password != "",
 	}, nil
 }
 
@@ -386,6 +386,10 @@ func (u *users) Update(ctx context.Context, id int32, update UserUpdate) error {
 }
 
 func (u *users) Delete(ctx context.Context, id int32) error {
+	if Mocks.Users.Delete != nil {
+		return Mocks.Users.Delete(ctx, id)
+	}
+
 	// Wrap in transaction because we delete from multiple tables.
 	tx, err := dbconn.Global.BeginTx(ctx, nil)
 	if err != nil {
@@ -435,21 +439,14 @@ func (u *users) Delete(ctx context.Context, id int32) error {
 		return err
 	}
 
-	// Soft-delete discussions data.
-	if _, err := tx.ExecContext(ctx, "UPDATE discussion_mail_reply_tokens SET deleted_at=now() WHERE deleted_at IS NULL AND user_id=$1", id); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, "UPDATE discussion_comments SET deleted_at=now() WHERE deleted_at IS NULL AND author_user_id=$1", id); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, "UPDATE discussion_threads SET deleted_at=now() WHERE deleted_at IS NULL AND author_user_id=$1", id); err != nil {
-		return err
-	}
-
 	return nil
 }
 
 func (u *users) HardDelete(ctx context.Context, id int32) error {
+	if Mocks.Users.HardDelete != nil {
+		return Mocks.Users.HardDelete(ctx, id)
+	}
+
 	// Wrap in transaction because we delete from multiple tables.
 	tx, err := dbconn.Global.BeginTx(ctx, nil)
 	if err != nil {
@@ -504,23 +501,6 @@ func (u *users) HardDelete(ctx context.Context, id int32) error {
 		return err
 	}
 
-	// Hard-delete discussions data.
-	if _, err := tx.ExecContext(ctx, "DELETE FROM discussion_mail_reply_tokens WHERE user_id=$1", id); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, "UPDATE discussion_threads SET target_repo_id=null WHERE author_user_id=$1", id); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM discussion_threads_target_repo WHERE thread_id IN (SELECT id FROM discussion_threads WHERE author_user_id=$1)", id); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM discussion_comments WHERE author_user_id=$1", id); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM discussion_threads WHERE author_user_id=$1", id); err != nil {
-		return err
-	}
-
 	res, err := tx.ExecContext(ctx, "DELETE FROM users WHERE id=$1", id)
 	if err != nil {
 		return err
@@ -549,6 +529,10 @@ func (u *users) SetIsSiteAdmin(ctx context.Context, id int32, isSiteAdmin bool) 
 // invited too many users, or some other error occurred). If the user has
 // quota remaining, their quota is decremented and ok is true.
 func (u *users) CheckAndDecrementInviteQuota(ctx context.Context, userID int32) (ok bool, err error) {
+	if Mocks.Users.CheckAndDecrementInviteQuota != nil {
+		return Mocks.Users.CheckAndDecrementInviteQuota(ctx, userID)
+	}
+
 	var quotaRemaining int32
 	sqlQuery := `
 	UPDATE users SET invite_quota=(invite_quota - 1)
@@ -677,6 +661,40 @@ func (u *users) List(ctx context.Context, opt *UsersListOptions) (_ []*types.Use
 	return u.getBySQL(ctx, q.Query(sqlf.PostgresBindVar), q.Args()...)
 }
 
+// ListDates lists all user's created and deleted dates, used by usage stats.
+func (*users) ListDates(ctx context.Context) (dates []types.UserDates, _ error) {
+	rows, err := dbconn.Global.QueryContext(ctx, listDatesQuery)
+	if err != nil {
+		return nil, err
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var d types.UserDates
+
+		err := rows.Scan(&d.UserID, &d.CreatedAt, &dbutil.NullTime{Time: &d.DeletedAt})
+		if err != nil {
+			return nil, err
+		}
+
+		dates = append(dates, d)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return dates, nil
+}
+
+const listDatesQuery = `
+-- source: cmd/frontend/db/users.go:ListDates
+SELECT id, created_at, deleted_at
+FROM users
+ORDER BY id ASC
+`
+
 func (*users) listSQL(opt UsersListOptions) (conds []*sqlf.Query) {
 	conds = []*sqlf.Query{sqlf.Sprintf("TRUE")}
 	conds = append(conds, sqlf.Sprintf("deleted_at IS NULL"))
@@ -715,7 +733,7 @@ func (u *users) getOneBySQL(ctx context.Context, query string, args ...interface
 
 // getBySQL returns users matching the SQL query, if any exist.
 func (*users) getBySQL(ctx context.Context, query string, args ...interface{}) ([]*types.User, error) {
-	rows, err := dbconn.Global.QueryContext(ctx, "SELECT u.id, u.username, u.display_name, u.avatar_url, u.created_at, u.updated_at, u.site_admin, u.tags FROM users u "+query, args...)
+	rows, err := dbconn.Global.QueryContext(ctx, "SELECT u.id, u.username, u.display_name, u.avatar_url, u.created_at, u.updated_at, u.site_admin, u.passwd IS NOT NULL, u.tags FROM users u "+query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -725,7 +743,7 @@ func (*users) getBySQL(ctx context.Context, query string, args ...interface{}) (
 	for rows.Next() {
 		var u types.User
 		var displayName, avatarURL sql.NullString
-		err := rows.Scan(&u.ID, &u.Username, &displayName, &avatarURL, &u.CreatedAt, &u.UpdatedAt, &u.SiteAdmin, pq.Array(&u.Tags))
+		err := rows.Scan(&u.ID, &u.Username, &displayName, &avatarURL, &u.CreatedAt, &u.UpdatedAt, &u.SiteAdmin, &u.BuiltinAuth, pq.Array(&u.Tags))
 		if err != nil {
 			return nil, err
 		}

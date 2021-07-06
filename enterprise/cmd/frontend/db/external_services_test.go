@@ -1,11 +1,13 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"sort"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/kylelemons/godebug/pretty"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
@@ -22,7 +24,7 @@ func TestExternalServices_ValidateConfig(t *testing.T) {
 			t.Helper()
 			sort.Strings(have)
 			if !reflect.DeepEqual(have, want) {
-				t.Error(pretty.Compare(have, want))
+				t.Error(cmp.Diff(have, want))
 			}
 		}
 	}
@@ -312,7 +314,13 @@ func TestExternalServices_ValidateConfig(t *testing.T) {
 		},
 		{
 			kind:   "BITBUCKETCLOUD",
-			desc:   "invalid git url type",
+			desc:   "bad apiURL scheme",
+			config: `{"apiURL": "badscheme://api.bitbucket.org"}`,
+			assert: includes("apiURL: Does not match pattern '^https?://'"),
+		},
+		{
+			kind:   "BITBUCKETCLOUD",
+			desc:   "invalid gitURLType",
 			config: `{"gitURLType": "bad"}`,
 			assert: includes(`gitURLType: gitURLType must be one of the following: "http", "ssh"`),
 		},
@@ -834,7 +842,7 @@ func TestExternalServices_ValidateConfig(t *testing.T) {
 			kind:   "GITLAB",
 			desc:   "invalid exclude item name",
 			config: `{"exclude": [{"name": "bar"}]}`,
-			assert: includes(`exclude.0.name: Does not match pattern '^[\w-]+/[\w.-]+$'`),
+			assert: includes(`exclude.0.name: Does not match pattern '^[\w.-]+(/[\w.-]+)+$'`),
 		},
 		{
 			kind:   "GITLAB",
@@ -852,6 +860,34 @@ func TestExternalServices_ValidateConfig(t *testing.T) {
 				"projectQuery": ["none"],
 				"exclude": [
 					{"name": "foo/bar", "id": 1234}
+				]
+			}`,
+			assert: equals(`<nil>`),
+		},
+		{
+			kind: "GITLAB",
+			desc: "subgroup paths are valid for exclude",
+			config: `
+			{
+				"url": "https://gitlab.corp.com",
+				"token": "very-secret-token",
+				"projectQuery": ["none"],
+				"exclude": [
+					{"name": "foo/bar/baz", "id": 1234}
+				]
+			}`,
+			assert: equals(`<nil>`),
+		},
+		{
+			kind: "GITLAB",
+			desc: "paths containing . in the first part of the path are valid for exclude",
+			config: `
+			{
+				"url": "https://gitlab.corp.com",
+				"token": "very-secret-token",
+				"projectQuery": ["none"],
+				"exclude": [
+					{"name": "foo.bar/baz", "id": 1234}
 				]
 			}`,
 			assert: equals(`<nil>`),
@@ -878,7 +914,7 @@ func TestExternalServices_ValidateConfig(t *testing.T) {
 			kind:   "GITLAB",
 			desc:   "invalid projects item name",
 			config: `{"projects": [{"name": "bar"}]}`,
-			assert: includes(`projects.0.name: Does not match pattern '^[\w-]+(/[\w.-]+)+$'`),
+			assert: includes(`projects.0.name: Does not match pattern '^[\w.-]+(/[\w.-]+)+$'`),
 		},
 		{
 			kind:   "GITLAB",
@@ -1236,7 +1272,7 @@ func TestExternalServices_ValidateConfig(t *testing.T) {
 			}
 
 			s := NewExternalServicesStore()
-			err := s.ValidateConfig(tc.kind, tc.config, tc.ps)
+			err := s.ValidateConfig(context.Background(), 0, tc.kind, tc.config, tc.ps)
 			switch e := err.(type) {
 			case nil:
 				have = append(have, "<nil>")

@@ -1,12 +1,12 @@
 import { noop } from 'lodash'
 import { Observable, ReplaySubject } from 'rxjs'
 import { take } from 'rxjs/operators'
-import uuid from 'uuid'
+import * as uuid from 'uuid'
 import * as GQL from '../../../../shared/src/graphql/schema'
 import { PlatformContext } from '../../../../shared/src/platform/context'
 import { TelemetryService } from '../../../../shared/src/telemetry/telemetryService'
-import { storage } from '../../browser/storage'
-import { isInPage } from '../../context'
+import { storage } from '../../browser-extension/web-extension-api/storage'
+import { isInPage } from '../context'
 import { logUserEvent, logEvent } from '../backend/userEvents'
 import { observeSourcegraphURL } from '../util/context'
 
@@ -24,6 +24,7 @@ export class EventLogger implements TelemetryService {
         const replaySubject = new ReplaySubject<string>(1)
         this.sourcegraphURLs = replaySubject.asObservable()
         // TODO pass this Observable as a parameter
+        // eslint-disable-next-line rxjs/no-ignored-subscription
         observeSourcegraphURL(isExtension).subscribe(replaySubject)
         // Fetch user ID on initial load.
         this.getAnonUserID().catch(noop)
@@ -67,14 +68,19 @@ export class EventLogger implements TelemetryService {
     /**
      * Log a user action on the associated self-hosted Sourcegraph instance (allows site admins on a private
      * Sourcegraph instance to see a count of unique users on a daily, weekly, and monthly basis).
-     *
-     * This is never sent to Sourcegraph.com (i.e., when using the integration with open source code).
      */
-    public async logCodeIntelligenceEvent(event: string, userEvent: GQL.UserEvent): Promise<void> {
+    public async logCodeIntelligenceEvent(
+        event: string,
+        userEvent: GQL.UserEvent,
+        eventProperties?: any
+    ): Promise<void> {
         const anonUserId = await this.getAnonUserID()
         const sourcegraphURL = await this.sourcegraphURLs.pipe(take(1)).toPromise()
         logUserEvent(userEvent, anonUserId, sourcegraphURL, this.requestGraphQL)
-        logEvent({ name: event, userCookieID: anonUserId, url: sourcegraphURL }, this.requestGraphQL)
+        logEvent(
+            { name: event, userCookieID: anonUserId, url: sourcegraphURL, argument: eventProperties },
+            this.requestGraphQL
+        )
     }
 
     /**
@@ -89,10 +95,10 @@ export class EventLogger implements TelemetryService {
             case 'goToDefinition':
             case 'goToDefinition.preloaded':
             case 'hover':
-                await this.logCodeIntelligenceEvent(eventName, GQL.UserEvent.CODEINTELINTEGRATION)
+                await this.logCodeIntelligenceEvent(eventName, GQL.UserEvent.CODEINTELINTEGRATION, eventProperties)
                 break
             case 'findReferences':
-                await this.logCodeIntelligenceEvent(eventName, GQL.UserEvent.CODEINTELINTEGRATIONREFS)
+                await this.logCodeIntelligenceEvent(eventName, GQL.UserEvent.CODEINTELINTEGRATIONREFS, eventProperties)
                 break
         }
     }

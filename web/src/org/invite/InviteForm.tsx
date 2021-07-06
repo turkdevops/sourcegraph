@@ -15,6 +15,7 @@ import { DismissibleAlert } from '../../components/DismissibleAlert'
 import { Form } from '../../components/Form'
 import { eventLogger } from '../../tracking/eventLogger'
 import { ErrorAlert } from '../../components/alerts'
+import * as H from 'history'
 
 function inviteUserToOrganization(
     username: string,
@@ -35,19 +36,11 @@ function inviteUserToOrganization(
         }
     ).pipe(
         map(({ data, errors }) => {
-            const eventData = {
-                organization: {
-                    invite: {
-                        username,
-                    },
-                    org_id: organization,
-                },
-            }
             if (!data || !data.inviteUserToOrganization || (errors && errors.length > 0)) {
-                eventLogger.log('InviteOrgMemberFailed', eventData)
+                eventLogger.log('InviteOrgMemberFailed')
                 throw createAggregateError(errors)
             }
-            eventLogger.log('OrgMemberInvited', eventData)
+            eventLogger.log('OrgMemberInvited')
             return data.inviteUserToOrganization
         })
     )
@@ -111,6 +104,7 @@ interface Props {
     onDidUpdateOrganizationMembers: () => void
 
     onOrganizationUpdate: () => void
+    history: H.History
 }
 
 interface SubmittedInvite extends Pick<GQL.IInviteUserToOrganizationResult, 'sentInvitationEmail' | 'invitationURL'> {
@@ -149,16 +143,7 @@ export class InviteForm extends React.PureComponent<Props, State> {
                 .pipe(
                     tap(e => e.preventDefault()),
                     withLatestFrom(orgChanges, this.usernameChanges),
-                    tap(([, orgId, username]) =>
-                        eventLogger.log('InviteOrgMemberClicked', {
-                            organization: {
-                                invite: {
-                                    username,
-                                },
-                                org_id: orgId,
-                            },
-                        })
-                    ),
+                    tap(() => eventLogger.log('InviteOrgMemberClicked')),
                     mergeMap(([, { orgID }, username]) =>
                         inviteUserToOrganization(username, orgID).pipe(
                             tap(() => this.props.onOrganizationUpdate()),
@@ -348,7 +333,9 @@ export class InviteForm extends React.PureComponent<Props, State> {
                         />
                         /* eslint-enable react/jsx-no-bind */
                     ))}
-                {this.state.error && <ErrorAlert className="invite-form__alert" error={this.state.error} />}
+                {this.state.error && (
+                    <ErrorAlert className="invite-form__alert" error={this.state.error} history={this.props.history} />
+                )}
             </div>
         )
     }

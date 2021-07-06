@@ -43,7 +43,7 @@ export class SurveyCTA extends React.PureComponent<SurveyCTAProps> {
     }
 
     private onClick = (score: number): void => {
-        eventLogger.log('SurveyButtonClicked', { marketing: { nps_score: score } })
+        eventLogger.log('SurveyButtonClicked', { score })
         if (this.props.onClick) {
             this.props.onClick(score)
         }
@@ -62,11 +62,11 @@ export class SurveyToast extends React.Component<Props, State> {
     constructor(props: Props) {
         super(props)
         this.state = {
-            visible: localStorage.getItem(HAS_DISMISSED_TOAST_KEY) !== 'true' && daysActiveCount % 60 === 3,
+            visible: localStorage.getItem(HAS_DISMISSED_TOAST_KEY) !== 'true' && daysActiveCount % 30 === 3,
         }
         if (this.state.visible) {
-            eventLogger.log('SurveyReminderViewed', { marketing: { sessionCount: daysActiveCount } })
-        } else if (daysActiveCount % 60 === 0) {
+            eventLogger.log('SurveyReminderViewed')
+        } else if (daysActiveCount % 30 === 0) {
             // Reset toast dismissal 3 days before it will be shown
             localStorage.setItem(HAS_DISMISSED_TOAST_KEY, 'false')
         }

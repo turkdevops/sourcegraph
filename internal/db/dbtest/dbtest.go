@@ -14,16 +14,12 @@ import (
 )
 
 // NewTx opens a transaction off of the given db, returning that
-// transaction if an error didn't occur, together with a cleanup
-// function to be deferred.
+// transaction if an error didn't occur.
 //
 // After opening this transaction, it executes the query
 //     SET CONSTRAINTS ALL DEFERRED
 // which aids in testing.
-//
-// The cleanup function rolls back the transaction only if
-// the test passed.
-func NewTx(t testing.TB, db *sql.DB) (*sql.Tx, func()) {
+func NewTx(t testing.TB, db *sql.DB) *sql.Tx {
 	tx, err := db.Begin()
 	if err != nil {
 		t.Fatal(err)
@@ -34,16 +30,16 @@ func NewTx(t testing.TB, db *sql.DB) (*sql.Tx, func()) {
 		t.Fatal(err)
 	}
 
-	return tx, func() {
-		if !t.Failed() {
-			_ = tx.Rollback()
-		}
-	}
+	t.Cleanup(func() {
+		_ = tx.Rollback()
+	})
+
+	return tx
 }
 
 // NewDB returns a connection to a clean, new temporary testing database
 // with the same schema as Sourcegraph's production Postgres database.
-func NewDB(t testing.TB, dsn string) (*sql.DB, func()) {
+func NewDB(t testing.TB, dsn string) *sql.DB {
 	var err error
 	var config *url.URL
 	if dsn == "" {
@@ -68,11 +64,15 @@ func NewDB(t testing.TB, dsn string) (*sql.DB, func()) {
 	config.Path = "/" + dbname
 	testDB := dbConn(t, config)
 
-	if err = dbutil.MigrateDB(testDB, dsn); err != nil {
+	m, err := dbutil.NewMigrate(testDB, dsn)
+	if err != nil {
+		t.Fatalf("failed to construct migrations: %s", err)
+	}
+	if err = dbutil.DoMigrate(m); err != nil {
 		t.Fatalf("failed to apply migrations: %s", err)
 	}
 
-	return testDB, func() {
+	t.Cleanup(func() {
 		defer db.Close()
 
 		if !t.Failed() {
@@ -84,7 +84,9 @@ func NewDB(t testing.TB, dsn string) (*sql.DB, func()) {
 		} else {
 			t.Logf("DATABASE %s left intact for inspection", dbname)
 		}
-	}
+	})
+
+	return testDB
 }
 
 func dbConn(t testing.TB, cfg *url.URL) *sql.DB {

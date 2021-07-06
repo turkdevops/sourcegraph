@@ -11,7 +11,6 @@ import (
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/auth"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/globals"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/hooks"
-	"github.com/sourcegraph/sourcegraph/cmd/frontend/httpapi"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/app"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/internal/app/assetsutil"
 	internalauth "github.com/sourcegraph/sourcegraph/cmd/frontend/internal/auth"
@@ -23,42 +22,43 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
 	tracepkg "github.com/sourcegraph/sourcegraph/internal/trace"
+	"github.com/sourcegraph/sourcegraph/internal/trace/ot"
 	"github.com/sourcegraph/sourcegraph/internal/version"
 )
 
 // newExternalHTTPHandler creates and returns the HTTP handler that serves the app and API pages to
 // external clients.
-func newExternalHTTPHandler(schema *graphql.Schema, githubWebhook, bitbucketServerWebhook http.Handler, lsifServerProxy *httpapi.LSIFServerProxy) (http.Handler, error) {
+func newExternalHTTPHandler(schema *graphql.Schema, githubWebhook, bitbucketServerWebhook, codeintelUploadHandler http.Handler) (http.Handler, error) {
 	// Each auth middleware determines on a per-request basis whether it should be enabled (if not, it
 	// immediately delegates the request to the next middleware in the chain).
 	authMiddlewares := auth.AuthMiddleware()
 
-	// HTTP API handler.
+	// HTTP API handler, the call order of middleware is LIFO.
 	r := router.New(mux.NewRouter().PathPrefix("/.api/").Subrouter())
-	apiHandler := internalhttpapi.NewHandler(r, schema, githubWebhook, bitbucketServerWebhook, lsifServerProxy)
+	apiHandler := internalhttpapi.NewHandler(r, schema, githubWebhook, bitbucketServerWebhook, codeintelUploadHandler)
+	if hooks.PostAuthMiddleware != nil {
+		// 🚨 SECURITY: These all run after the auth handler so the client is authenticated.
+		apiHandler = hooks.PostAuthMiddleware(apiHandler)
+	}
 	apiHandler = authMiddlewares.API(apiHandler) // 🚨 SECURITY: auth middleware
 	// 🚨 SECURITY: The HTTP API should not accept cookies as authentication (except those with the
 	// X-Requested-With header). Doing so would open it up to CSRF attacks.
 	apiHandler = session.CookieMiddlewareWithCSRFSafety(apiHandler, corsAllowHeader, isTrustedOrigin) // API accepts cookies with special header
 	apiHandler = internalhttpapi.AccessTokenAuthMiddleware(apiHandler)                                // API accepts access tokens
-	if hooks.PostAuthMiddleware != nil {
-		// 🚨 SECURITY: These all run after the auth handler so the client is authenticated.
-		apiHandler = hooks.PostAuthMiddleware(apiHandler)
-	}
 	apiHandler = gziphandler.GzipHandler(apiHandler)
 
-	// App handler (HTML pages).
+	// App handler (HTML pages), the call order of middleware is LIFO.
 	appHandler := app.NewHandler()
+	if hooks.PostAuthMiddleware != nil {
+		// 🚨 SECURITY: These all run after the auth handler so the client is authenticated.
+		appHandler = hooks.PostAuthMiddleware(appHandler)
+	}
 	appHandler = handlerutil.CSRFMiddleware(appHandler, func() bool {
 		return globals.ExternalURL().Scheme == "https"
 	}) // after appAuthMiddleware because SAML IdP posts data to us w/o a CSRF token
 	appHandler = authMiddlewares.App(appHandler)                       // 🚨 SECURITY: auth middleware
 	appHandler = session.CookieMiddleware(appHandler)                  // app accepts cookies
 	appHandler = internalhttpapi.AccessTokenAuthMiddleware(appHandler) // app accepts access tokens
-	if hooks.PostAuthMiddleware != nil {
-		// 🚨 SECURITY: These all run after the auth handler so the client is authenticated.
-		appHandler = hooks.PostAuthMiddleware(appHandler)
-	}
 
 	// Mount handlers and assets.
 	sm := http.NewServeMux()
@@ -73,7 +73,8 @@ func newExternalHTTPHandler(schema *graphql.Schema, githubWebhook, bitbucketServ
 	// 🚨 SECURITY: Auth middleware that must run before other auth middlewares.
 	h = internalauth.OverrideAuthMiddleware(h)
 	h = internalauth.ForbidAllRequestsMiddleware(h)
-	h = tracepkg.Middleware(h)
+	h = tracepkg.HTTPTraceMiddleware(h)
+	h = ot.Middleware(h)
 	h = middleware.SourcegraphComGoGetHandler(h)
 	h = middleware.BlackHole(h)
 	h = secureHeadersMiddleware(h)
@@ -165,7 +166,7 @@ func secureHeadersMiddleware(next http.Handler) http.Handler {
 
 			if r.Method == "OPTIONS" {
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", corsAllowHeader+", X-Sourcegraph-Client, Content-Type, Authorization")
+				w.Header().Set("Access-Control-Allow-Headers", corsAllowHeader+", X-Sourcegraph-Client, Content-Type, Authorization, X-Sourcegraph-Should-Trace")
 				w.WriteHeader(http.StatusOK)
 				return // do not invoke next handler
 			}

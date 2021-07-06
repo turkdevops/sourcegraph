@@ -9,6 +9,7 @@ import (
 
 	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/graph-gophers/graphql-go/relay"
+	"github.com/inconshreveable/log15"
 	otlog "github.com/opentracing/opentracing-go/log"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/db"
 	"github.com/sourcegraph/sourcegraph/cmd/frontend/graphqlbackend/graphqlutil"
@@ -16,7 +17,6 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/search"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
-	log15 "gopkg.in/inconshreveable/log15.v2"
 )
 
 // searchCursor represents a decoded search pagination cursor. From an API
@@ -132,7 +132,7 @@ func (r *searchResolver) paginatedResults(ctx context.Context) (result *SearchRe
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	repos, missingRepoRevs, alertResult, err := r.determineRepos(ctx, tr, start)
+	repos, missingRepoRevs, _, alertResult, err := r.determineRepos(ctx, tr, start)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +161,7 @@ func (r *searchResolver) paginatedResults(ctx context.Context) (result *SearchRe
 		return nil, err
 	}
 
-	resultTypes, _ := r.determineResultTypes(args, "")
+	resultTypes := r.determineResultTypes(args, "")
 	tr.LazyPrintf("resultTypes: %v", resultTypes)
 
 	if len(resultTypes) != 1 || resultTypes[0] != "file" {
@@ -186,13 +186,20 @@ func (r *searchResolver) paginatedResults(ctx context.Context) (result *SearchRe
 	}
 	common.update(*fileCommon)
 
-	tr.LazyPrintf("results=%d limitHit=%v cloning=%d missing=%d timedout=%d", len(results), common.limitHit, len(common.cloning), len(common.missing), len(common.timedout))
+	tr.LazyPrintf("results=%d limitHit=%v cloning=%d missing=%d excludedFork=%d excludedArchived=%d timedout=%d",
+		len(results),
+		common.limitHit,
+		len(common.cloning),
+		len(common.missing),
+		common.excluded.forks,
+		common.excluded.archived,
+		len(common.timedout))
 
 	// Alert is a potential alert shown to the user.
 	var alert *searchAlert
 
 	if len(missingRepoRevs) > 0 {
-		alert = r.alertForMissingRepoRevs(missingRepoRevs)
+		alert = alertForMissingRepoRevs(r.patternType, missingRepoRevs)
 	}
 
 	log15.Info("next cursor for paginated search request",
@@ -559,6 +566,8 @@ func sliceSearchResultsCommon(common *searchResultsCommon, firstResultRepo, last
 	final.indexed = doAppend(final.indexed, common.indexed)
 	final.cloning = doAppend(final.cloning, common.cloning)
 	final.missing = doAppend(final.missing, common.missing)
+	final.excluded.forks = final.excluded.forks + common.excluded.forks
+	final.excluded.archived = final.excluded.archived + common.excluded.archived
 	final.timedout = doAppend(final.timedout, common.timedout)
 	return final
 }

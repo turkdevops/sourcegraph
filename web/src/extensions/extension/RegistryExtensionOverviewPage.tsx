@@ -1,7 +1,7 @@
 import { parseISO } from 'date-fns'
 import maxDate from 'date-fns/max'
 import { isObject, truncate } from 'lodash'
-import GithubCircleIcon from 'mdi-react/GithubCircleIcon'
+import GithubIcon from 'mdi-react/GithubIcon'
 import * as React from 'react'
 import { Link } from 'react-router-dom'
 import { LinkOrSpan } from '../../../../shared/src/components/LinkOrSpan'
@@ -14,9 +14,11 @@ import { EventLogger } from '../../tracking/eventLogger'
 import { extensionIDPrefix, extensionsQuery, urlToExtensionsQuery, validCategories } from './extension'
 import { ExtensionAreaRouteContext } from './ExtensionArea'
 import { ExtensionREADME } from './RegistryExtensionREADME'
+import * as H from 'history'
 
 interface Props extends Pick<ExtensionAreaRouteContext, 'extension'> {
     eventLogger: Pick<EventLogger, 'logViewEvent'>
+    history: H.History
 }
 
 /** A page that displays overview information about a registry extension. */
@@ -57,7 +59,7 @@ export class RegistryExtensionOverviewPage extends React.PureComponent<Props> {
             <div className="registry-extension-overview-page d-flex flex-wrap">
                 <PageTitle title={this.props.extension.id} />
                 <div className="registry-extension-overview-page__readme mr-3">
-                    <ExtensionREADME extension={this.props.extension} />
+                    <ExtensionREADME extension={this.props.extension} history={this.props.history} />
                 </div>
                 <aside className="registry-extension-overview-page__sidebar">
                     {categories && (
@@ -186,7 +188,7 @@ export class RegistryExtensionOverviewPage extends React.PureComponent<Props> {
                                 {repositoryURL && (
                                     <div className="d-flex">
                                         {repositoryURL.hostname === 'github.com' && (
-                                            <GithubCircleIcon className="icon-inline mr-1" />
+                                            <GithubIcon className="icon-inline mr-1" />
                                         )}
                                         <a
                                             href={repositoryURL.href}

@@ -19,10 +19,12 @@ import { refreshSiteFlags } from '../site/backend'
 import { eventLogger } from '../tracking/eventLogger'
 import { fetchAllRepositoriesAndPollIfEmptyOrAnyCloning } from './backend'
 import { ErrorAlert } from '../components/alerts'
+import * as H from 'history'
 
 interface RepositoryNodeProps extends ActivationProps {
     node: GQL.IRepository
     onDidUpdate?: () => void
+    history: H.History
 }
 
 interface RepositoryNodeState {
@@ -73,18 +75,15 @@ class RepositoryNode extends React.PureComponent<RepositoryNodeProps, Repository
                         }{' '}
                     </div>
                 </div>
-                {this.state.errorDescription && <ErrorAlert className="mt-2" error={this.state.errorDescription} />}
+                {this.state.errorDescription && (
+                    <ErrorAlert className="mt-2" error={this.state.errorDescription} history={this.props.history} />
+                )}
             </li>
         )
     }
 }
 
 interface Props extends RouteComponentProps<{}>, ActivationProps {}
-
-class FilteredRepositoryConnection extends FilteredConnection<
-    GQL.IRepository,
-    Pick<RepositoryNodeProps, 'onDidUpdate'>
-> {}
 
 /**
  * A page displaying the repositories on this site.
@@ -142,22 +141,21 @@ export class SiteAdminRepositoriesPage extends React.PureComponent<Props> {
     }
 
     public render(): JSX.Element | null {
-        const nodeProps: Pick<RepositoryNodeProps, 'onDidUpdate' | 'activation'> = {
+        const nodeProps: Omit<RepositoryNodeProps, 'node'> = {
             onDidUpdate: this.onDidUpdateRepository,
             activation: this.props.activation,
+            history: this.props.history,
         }
 
         return (
             <div className="site-admin-repositories-page">
                 <PageTitle title="Repositories - Admin" />
-                <div className="d-flex justify-content-between align-items-center mt-3 mb-1">
-                    <h2 className="mb-0">Repositories</h2>
-                </div>
+                <h2>Repositories</h2>
                 <p>
-                    Repositories are mirrored from connected{' '}
-                    <Link to="/site-admin/external-services">external services</Link>.
+                    Repositories are synced from connected{' '}
+                    <Link to="/site-admin/external-services">code host connections</Link>.
                 </p>
-                <FilteredRepositoryConnection
+                <FilteredConnection<GQL.IRepository, Omit<RepositoryNodeProps, 'node'>>
                     className="list-group list-group-flush mt-3"
                     noun="repository"
                     pluralNoun="repositories"

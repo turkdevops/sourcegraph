@@ -18,11 +18,6 @@ import {
 
 interface Props extends RouteComponentProps<{}> {}
 
-class FilteredExternalAccountConnection extends FilteredConnection<
-    GQL.IExternalAccount,
-    Pick<ExternalAccountNodeProps, 'onDidUpdate' | 'showUser'>
-> {}
-
 interface FilterParams {
     user?: GQL.ID
     serviceType?: string
@@ -46,15 +41,16 @@ export class SiteAdminExternalAccountsPage extends React.Component<Props> {
     }
 
     public render(): JSX.Element | null {
-        const nodeProps: Pick<ExternalAccountNodeProps, 'onDidUpdate' | 'showUser'> = {
+        const nodeProps: Omit<ExternalAccountNodeProps, 'node'> = {
             onDidUpdate: this.onDidUpdateExternalAccount,
             showUser: true,
+            history: this.props.history,
         }
 
         return (
             <div className="user-settings-external-accounts-page">
                 <PageTitle title="External accounts" />
-                <div className="d-flex justify-content-between align-items-center mt-3 mb-3">
+                <div className="d-flex justify-content-between align-items-center mb-3">
                     <h2 className="mb-0">External user accounts</h2>
                     <Link to="/site-admin/auth/providers" className="btn btn-secondary">
                         View auth providers
@@ -64,7 +60,7 @@ export class SiteAdminExternalAccountsPage extends React.Component<Props> {
                     An external account (on an <Link to="/site-admin/auth/providers">authentication provider</Link>) is
                     linked to a Sourcegraph user when it's used to sign into Sourcegraph.
                 </p>
-                <FilteredExternalAccountConnection
+                <FilteredConnection<GQL.IExternalAccount, Omit<ExternalAccountNodeProps, 'node'>>
                     className="list-group list-group-flush mt-3"
                     noun="external user account"
                     pluralNoun="external user accounts"

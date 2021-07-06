@@ -1,12 +1,8 @@
-/**
- * @jest-environment node
- */
-
-import * as path from 'path'
-import { saveScreenshotsUponFailuresAndClosePage } from '../../../shared/src/e2e/screenshotReporter'
+import expect from 'expect'
+import { saveScreenshotsUponFailures } from '../../../shared/src/e2e/screenshotReporter'
 import { createDriverForTest, Driver } from '../../../shared/src/e2e/driver'
 import { ExternalServiceKind } from '../../../shared/src/graphql/schema'
-import { PhabricatorMapping } from '../browser/types'
+import { PhabricatorMapping } from '../browser-extension/web-extension-api/types'
 import { isEqual } from 'lodash'
 import { getConfig } from '../../../shared/src/e2e/config'
 import { retry } from '../../../shared/src/e2e/e2e-test-utils'
@@ -20,13 +16,7 @@ const PHABRICATOR_PASSWORD = process.env.PHABRICATOR_PASSWORD || 'sourcegraph'
 const TEST_NATIVE_INTEGRATION = Boolean(
     process.env.TEST_NATIVE_INTEGRATION && JSON.parse(process.env.TEST_NATIVE_INTEGRATION)
 )
-const { gitHubToken, sourcegraphBaseUrl } = getConfig('gitHubToken', 'sourcegraphBaseUrl')
-
-// 1 minute test timeout. This must be greater than the default Puppeteer
-// command timeout of 30s in order to get the stack trace to point to the
-// Puppeteer command that failed instead of a cryptic Jest test timeout
-// location.
-jest.setTimeout(1000 * 60 * 1000)
+const { gitHubToken, sourcegraphBaseUrl, ...restConfig } = getConfig('gitHubToken', 'sourcegraphBaseUrl')
 
 /**
  * Logs into Phabricator.
@@ -46,14 +36,19 @@ async function phabricatorLogin({ page }: Driver): Promise<void> {
  * Waits for the jrpc repository to finish cloning.
  */
 async function waitUntilRepositoryCloned(driver: Driver): Promise<void> {
-    await retry(async () => {
-        await driver.page.goto(PHABRICATOR_BASE_URL + '/source/jrpc/manage/status/')
-        expect(
-            await driver.page.evaluate(() =>
-                [...document.querySelectorAll('.phui-status-item-target')].map(element => element.textContent!.trim())
-            )
-        ).toContain('Fully Imported')
-    })
+    await retry(
+        async () => {
+            await driver.page.goto(PHABRICATOR_BASE_URL + '/source/jrpc/manage/status/')
+            expect(
+                await driver.page.evaluate(() =>
+                    [...document.querySelectorAll('.phui-status-item-target')].map(element =>
+                        element.textContent!.trim()
+                    )
+                )
+            ).toContain('Fully Imported')
+        },
+        { retries: 20 }
+    )
 }
 
 /**
@@ -139,7 +134,9 @@ async function configureSourcegraphIntegration(driver: Driver): Promise<void> {
  * Runs initial setup for the Phabricator instance.
  */
 async function init(driver: Driver): Promise<void> {
-    await driver.ensureLoggedIn({ username: 'test', password: 'test', email: 'test@test.com' })
+    if (restConfig.testUserPassword) {
+        await driver.ensureLoggedIn({ username: 'test', password: restConfig.testUserPassword })
+    }
     // TODO test with a Gitolite external service
     await driver.ensureHasExternalService({
         kind: ExternalServiceKind.GITHUB,
@@ -165,22 +162,14 @@ async function init(driver: Driver): Promise<void> {
 describe('Sourcegraph Phabricator extension', () => {
     let driver: Driver
 
-    beforeAll(async () => {
-        try {
-            driver = await createDriverForTest({ loadExtension: !TEST_NATIVE_INTEGRATION, sourcegraphBaseUrl })
-            await init(driver)
-        } catch (err) {
-            console.error(err)
-            setTimeout(() => process.exit(1), 100)
-        }
-    }, 4 * 60 * 1000)
+    before(async function () {
+        this.timeout(4 * 60 * 1000)
+        driver = await createDriverForTest({ loadExtension: !TEST_NATIVE_INTEGRATION, sourcegraphBaseUrl })
+        await init(driver)
+    })
 
     // Take a screenshot when a test fails.
-    saveScreenshotsUponFailuresAndClosePage(
-        path.resolve(__dirname, '..', '..', '..', '..'),
-        path.resolve(__dirname, '..', '..', '..', '..', 'puppeteer'),
-        () => driver.page
-    )
+    saveScreenshotsUponFailures(() => driver.page)
 
     it('adds "View on Sourcegraph" buttons to files', async () => {
         await driver.page.goto(
@@ -221,7 +210,7 @@ describe('Sourcegraph Phabricator extension', () => {
         await driver.page.waitForSelector('.e2e-tooltip-go-to-definition')
     })
 
-    afterAll(async () => {
+    after(async () => {
         await driver.close()
     })
 })
