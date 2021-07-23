@@ -15,7 +15,7 @@ require (
 	github.com/codahale/hdrhistogram v0.0.0-20161010025455-3a0bb77429bd // indirect
 	github.com/coreos/go-oidc v2.2.1+incompatible
 	github.com/coreos/go-semver v0.3.0
-	github.com/crewjam/saml v0.4.0
+	github.com/crewjam/saml v0.4.3
 	github.com/davecgh/go-spew v1.1.1
 	github.com/daviddengcn/go-colortext v1.0.0
 	github.com/dghubble/gologin v2.2.0+incompatible
@@ -99,7 +99,7 @@ require (
 	github.com/prometheus/procfs v0.0.11 // indirect
 	github.com/rainycape/unidecode v0.0.0-20150907023854-cb7f23ec59be
 	github.com/russellhaering/gosaml2 v0.4.0
-	github.com/russellhaering/goxmldsig v0.0.0-20180430223755-7acd5e4a6ef7
+	github.com/russellhaering/goxmldsig v1.1.0
 	github.com/russross/blackfriday v2.0.0+incompatible // indirect
 	github.com/segmentio/fasthash v1.0.1
 	github.com/sergi/go-diff v1.1.0
